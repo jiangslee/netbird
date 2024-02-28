@@ -60,8 +60,8 @@ func (c *wgKernelConfigurer) updatePeer(peerKey string, allowedIps string, keepA
 		ReplaceAllowedIPs:           true,
 		AllowedIPs:                  []net.IPNet{*ipNet},
 		PersistentKeepaliveInterval: &keepAlive,
-		PresharedKey:                preSharedKey,
 		Endpoint:                    endpoint,
+		PresharedKey:                preSharedKey,
 	}
 
 	config := wgtypes.Config{
@@ -206,4 +206,16 @@ func (c *wgKernelConfigurer) configure(config wgtypes.Config) error {
 }
 
 func (c *wgKernelConfigurer) close() {
+}
+
+func (c *wgKernelConfigurer) getStats(peerKey string) (WGStats, error) {
+	peer, err := c.getPeer(c.deviceName, peerKey)
+	if err != nil {
+		return WGStats{}, fmt.Errorf("get wireguard stats: %w", err)
+	}
+	return WGStats{
+		LastHandshake: peer.LastHandshakeTime,
+		TxBytes:       peer.TransmitBytes,
+		RxBytes:       peer.ReceiveBytes,
+	}, nil
 }

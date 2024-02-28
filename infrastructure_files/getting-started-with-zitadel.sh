@@ -137,6 +137,13 @@ create_new_application() {
   BASE_REDIRECT_URL2=$5
   LOGOUT_URL=$6
   ZITADEL_DEV_MODE=$7
+  DEVICE_CODE=$8
+
+  if [[ $DEVICE_CODE == "true" ]]; then
+    GRANT_TYPES='["OIDC_GRANT_TYPE_AUTHORIZATION_CODE","OIDC_GRANT_TYPE_DEVICE_CODE","OIDC_GRANT_TYPE_REFRESH_TOKEN"]'
+  else
+    GRANT_TYPES='["OIDC_GRANT_TYPE_AUTHORIZATION_CODE","OIDC_GRANT_TYPE_REFRESH_TOKEN"]'
+  fi
 
   RESPONSE=$(
     curl -sS -X POST "$INSTANCE_URL/management/v1/projects/$PROJECT_ID/apps/oidc" \
@@ -154,10 +161,7 @@ create_new_application() {
     "RESPONSETypes": [
       "OIDC_RESPONSE_TYPE_CODE"
     ],
-    "grantTypes": [
-      "OIDC_GRANT_TYPE_AUTHORIZATION_CODE",
-      "OIDC_GRANT_TYPE_REFRESH_TOKEN"
-    ],
+    "grantTypes": '"$GRANT_TYPES"',
     "appType": "OIDC_APP_TYPE_USER_AGENT",
     "authMethodType": "OIDC_AUTH_METHOD_TYPE_NONE",
     "version": "OIDC_VERSION_1_0",
@@ -340,10 +344,10 @@ init_zitadel() {
 
   # create zitadel spa applications
   echo "Creating new Zitadel SPA Dashboard application"
-  DASHBOARD_APPLICATION_CLIENT_ID=$(create_new_application "$INSTANCE_URL" "$PAT" "Dashboard" "$BASE_REDIRECT_URL/nb-auth" "$BASE_REDIRECT_URL/nb-silent-auth" "$BASE_REDIRECT_URL/" "$ZITADEL_DEV_MODE")
+  DASHBOARD_APPLICATION_CLIENT_ID=$(create_new_application "$INSTANCE_URL" "$PAT" "Dashboard" "$BASE_REDIRECT_URL/nb-auth" "$BASE_REDIRECT_URL/nb-silent-auth" "$BASE_REDIRECT_URL/" "$ZITADEL_DEV_MODE" "false")
 
   echo "Creating new Zitadel SPA Cli application"
-  CLI_APPLICATION_CLIENT_ID=$(create_new_application "$INSTANCE_URL" "$PAT" "Cli" "http://localhost:53000/" "http://localhost:54000/" "http://localhost:53000/" "true")
+  CLI_APPLICATION_CLIENT_ID=$(create_new_application "$INSTANCE_URL" "$PAT" "Cli" "http://localhost:53000/" "http://localhost:54000/" "http://localhost:53000/" "true" "true")
 
   MACHINE_USER_ID=$(create_service_user "$INSTANCE_URL" "$PAT")
 
@@ -478,6 +482,13 @@ read_nb_3478_port() {
     read_nb_3478_port
   fi
   echo "$READ_NETBIRD_3478_PORT"
+get_turn_external_ip() {
+  TURN_EXTERNAL_IP_CONFIG="#external-ip="
+  IP=$(curl -s -4 https://jsonip.com | jq -r '.ip')
+  if [[ "x-$IP" != "x-" ]]; then
+    TURN_EXTERNAL_IP_CONFIG="external-ip=$IP"
+  fi
+  echo "$TURN_EXTERNAL_IP_CONFIG"
 }
 
 initEnvironment() {
@@ -490,6 +501,7 @@ initEnvironment() {
   TURN_PASSWORD=$(openssl rand -base64 32 | sed 's/=//g')
   TURN_MIN_PORT=49152
   TURN_MAX_PORT=65535
+  TURN_EXTERNAL_IP_CONFIG=$(get_turn_external_ip)
 
   if [ "$NETBIRD_DOMAIN" == "use-ip" ]; then
     NETBIRD_DOMAIN=$(get_main_ip_address)
@@ -652,6 +664,8 @@ $NETBIRD_DOMAIN {
     reverse_proxy /.well-known/openid-configuration h2c://zitadel:8080
     reverse_proxy /openapi/* h2c://zitadel:8080
     reverse_proxy /debug/* h2c://zitadel:8080
+    reverse_proxy /device/* h2c://zitadel:8080
+    reverse_proxy /device h2c://zitadel:8080
     # Dashboard
     reverse_proxy /* dashboard:80
 }
@@ -661,6 +675,7 @@ EOF
 renderTurnServerConf() {
   cat <<EOF
 listening-port=$TURN_LISTENING_PORT
+$TURN_EXTERNAL_IP_CONFIG
 tls-listening-port=5349
 min-port=$TURN_MIN_PORT
 max-port=$TURN_MAX_PORT
@@ -718,6 +733,14 @@ renderManagementJson() {
         "ExtraConfig": {
             "ManagementEndpoint": "$NETBIRD_HTTP_PROTOCOL://$NETBIRD_DOMAIN/management/v1"
         }
+     },
+   "DeviceAuthorizationFlow": {
+       "Provider": "hosted",
+       "ProviderConfig": {
+           "Audience": "$NETBIRD_AUTH_CLIENT_ID_CLI",
+           "ClientID": "$NETBIRD_AUTH_CLIENT_ID_CLI",
+           "Scope": "openid"
+       }
      },
     "PKCEAuthorizationFlow": {
         "ProviderConfig": {
@@ -789,14 +812,14 @@ services:
     ports:
       - '$NETBIRD_PORT:443'
       - '$NETBIRD_HTTP_PORT:80'
-      - '$NETBIRD_8080_PORT:8080'
+      #- '$NETBIRD_8080_PORT:8080'
     volumes:
       - netbird_caddy_data:/data
       - ./Caddyfile:/etc/caddy/Caddyfile
       - ./certs:/etc/caddy/ccerts
   #UI dashboard
   dashboard:
-    image: wiretrustee/dashboard:latest
+    image: netbirdio/dashboard:latest
     restart: unless-stopped
     networks: [netbird]
     env_file:

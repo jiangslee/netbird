@@ -22,6 +22,8 @@ import (
 	"github.com/netbirdio/netbird/client/internal/acl"
 	"github.com/netbirdio/netbird/client/internal/dns"
 	"github.com/netbirdio/netbird/client/internal/peer"
+	"github.com/netbirdio/netbird/client/internal/relay"
+	"github.com/netbirdio/netbird/client/internal/rosenpass"
 	"github.com/netbirdio/netbird/client/internal/routemanager"
 	"github.com/netbirdio/netbird/client/internal/wgproxy"
 	nbssh "github.com/netbirdio/netbird/client/ssh"
@@ -76,6 +78,11 @@ type EngineConfig struct {
 	NATExternalIPs []string
 
 	CustomDNSAddress string
+
+	RosenpassEnabled    bool
+	RosenpassPermissive bool
+
+	ServerSSHAllowed bool
 }
 
 // Engine is a mechanism responsible for reacting on Signal and Management stream events and managing connections to the remote peers.
@@ -86,6 +93,8 @@ type Engine struct {
 	mgmClient mgm.Client
 	// peerConns is a map that holds all the peers that are known to this peer
 	peerConns map[string]*peer.Conn
+	// rpManager is a Rosenpass manager
+	rpManager *rosenpass.Manager
 
 	// syncMsgMux is used to guarantee sequential Management Service message processing
 	syncMsgMux *sync.Mutex
@@ -120,6 +129,11 @@ type Engine struct {
 	acl          acl.Manager
 
 	dnsServer dns.Server
+
+	mgmProbe    *Probe
+	signalProbe *Probe
+	relayProbe  *Probe
+	wgProbe     *Probe
 }
 
 // Peer is an instance of the Connection Peer
@@ -130,11 +144,43 @@ type Peer struct {
 
 // NewEngine creates a new Connection Engine
 func NewEngine(
-	ctx context.Context, cancel context.CancelFunc,
-	signalClient signal.Client, mgmClient mgm.Client,
-	config *EngineConfig, mobileDep MobileDependency, statusRecorder *peer.Status,
+	ctx context.Context,
+	cancel context.CancelFunc,
+	signalClient signal.Client,
+	mgmClient mgm.Client,
+	config *EngineConfig,
+	mobileDep MobileDependency,
+	statusRecorder *peer.Status,
 ) *Engine {
+	return NewEngineWithProbes(
+		ctx,
+		cancel,
+		signalClient,
+		mgmClient,
+		config,
+		mobileDep,
+		statusRecorder,
+		nil,
+		nil,
+		nil,
+		nil,
+	)
+}
 
+// NewEngineWithProbes creates a new Connection Engine with probes attached
+func NewEngineWithProbes(
+	ctx context.Context,
+	cancel context.CancelFunc,
+	signalClient signal.Client,
+	mgmClient mgm.Client,
+	config *EngineConfig,
+	mobileDep MobileDependency,
+	statusRecorder *peer.Status,
+	mgmProbe *Probe,
+	signalProbe *Probe,
+	relayProbe *Probe,
+	wgProbe *Probe,
+) *Engine {
 	return &Engine{
 		ctx:            ctx,
 		cancel:         cancel,
@@ -150,6 +196,10 @@ func NewEngine(
 		sshServerFunc:  nbssh.DefaultSSHServer,
 		statusRecorder: statusRecorder,
 		wgProxyFactory: wgproxy.NewFactory(config.WgPort),
+		mgmProbe:       mgmProbe,
+		signalProbe:    signalProbe,
+		relayProbe:     relayProbe,
+		wgProbe:        wgProbe,
 	}
 }
 
@@ -184,6 +234,23 @@ func (e *Engine) Start() error {
 		return err
 	}
 	e.wgInterface = wgIface
+
+	if e.config.RosenpassEnabled {
+		log.Infof("rosenpass is enabled")
+		if e.config.RosenpassPermissive {
+			log.Infof("running rosenpass in permissive mode")
+		} else {
+			log.Infof("running rosenpass in strict mode")
+		}
+		e.rpManager, err = rosenpass.NewManager(e.config.PreSharedKey, e.config.WgIfaceName)
+		if err != nil {
+			return err
+		}
+		err := e.rpManager.Run()
+		if err != nil {
+			return err
+		}
+	}
 
 	initialRoutes, dnsServer, err := e.newDnsServer()
 	if err != nil {
@@ -234,6 +301,7 @@ func (e *Engine) Start() error {
 
 	e.receiveSignalEvents()
 	e.receiveManagementEvents()
+	e.receiveProbeEvents()
 
 	return nil
 }
@@ -363,7 +431,8 @@ func sendSignal(message *sProto.Message, s signal.Client) error {
 }
 
 // SignalOfferAnswer signals either an offer or an answer to remote peer
-func SignalOfferAnswer(offerAnswer peer.OfferAnswer, myKey wgtypes.Key, remoteKey wgtypes.Key, s signal.Client, isAnswer bool) error {
+func SignalOfferAnswer(offerAnswer peer.OfferAnswer, myKey wgtypes.Key, remoteKey wgtypes.Key, s signal.Client,
+	isAnswer bool) error {
 	var t sProto.Body_Type
 	if isAnswer {
 		t = sProto.Body_ANSWER
@@ -374,7 +443,7 @@ func SignalOfferAnswer(offerAnswer peer.OfferAnswer, myKey wgtypes.Key, remoteKe
 	msg, err := signal.MarshalCredential(myKey, offerAnswer.WgListenPort, remoteKey, &signal.Credential{
 		UFrag: offerAnswer.IceCredentials.UFrag,
 		Pwd:   offerAnswer.IceCredentials.Pwd,
-	}, t)
+	}, t, offerAnswer.RosenpassPubKey, offerAnswer.RosenpassAddr)
 	if err != nil {
 		return err
 	}
@@ -421,44 +490,52 @@ func isNil(server nbssh.Server) bool {
 }
 
 func (e *Engine) updateSSH(sshConf *mgmProto.SSHConfig) error {
-	if sshConf.GetSshEnabled() {
-		if runtime.GOOS == "windows" {
-			log.Warnf("running SSH server on Windows is not supported")
-			return nil
-		}
-		// start SSH server if it wasn't running
-		if isNil(e.sshServer) {
-			// nil sshServer means it has not yet been started
-			var err error
-			e.sshServer, err = e.sshServerFunc(e.config.SSHKey,
-				fmt.Sprintf("%s:%d", e.wgInterface.Address().IP.String(), nbssh.DefaultSSHPort))
-			if err != nil {
-				return err
+
+	if !e.config.ServerSSHAllowed {
+		log.Warnf("running SSH server is not permitted")
+		return nil
+	} else {
+
+		if sshConf.GetSshEnabled() {
+			if runtime.GOOS == "windows" {
+				log.Warnf("running SSH server on Windows is not supported")
+				return nil
 			}
-			go func() {
-				// blocking
-				err = e.sshServer.Start()
+			// start SSH server if it wasn't running
+			if isNil(e.sshServer) {
+				// nil sshServer means it has not yet been started
+				var err error
+				e.sshServer, err = e.sshServerFunc(e.config.SSHKey,
+					fmt.Sprintf("%s:%d", e.wgInterface.Address().IP.String(), nbssh.DefaultSSHPort))
 				if err != nil {
-					// will throw error when we stop it even if it is a graceful stop
-					log.Debugf("stopped SSH server with error %v", err)
+					return err
 				}
-				e.syncMsgMux.Lock()
-				defer e.syncMsgMux.Unlock()
-				e.sshServer = nil
-				log.Infof("stopped SSH server")
-			}()
-		} else {
-			log.Debugf("SSH server is already running")
+				go func() {
+					// blocking
+					err = e.sshServer.Start()
+					if err != nil {
+						// will throw error when we stop it even if it is a graceful stop
+						log.Debugf("stopped SSH server with error %v", err)
+					}
+					e.syncMsgMux.Lock()
+					defer e.syncMsgMux.Unlock()
+					e.sshServer = nil
+					log.Infof("stopped SSH server")
+				}()
+			} else {
+				log.Debugf("SSH server is already running")
+			}
+		} else if !isNil(e.sshServer) {
+			// Disable SSH server request, so stop it if it was running
+			err := e.sshServer.Stop()
+			if err != nil {
+				log.Warnf("failed to stop SSH server %v", err)
+			}
+			e.sshServer = nil
 		}
-	} else if !isNil(e.sshServer) {
-		// Disable SSH server request, so stop it if it was running
-		err := e.sshServer.Stop()
-		if err != nil {
-			log.Warnf("failed to stop SSH server %v", err)
-		}
-		e.sshServer = nil
+		return nil
+
 	}
-	return nil
 }
 
 func (e *Engine) updateConfig(conf *mgmProto.PeerConfig) error {
@@ -476,7 +553,7 @@ func (e *Engine) updateConfig(conf *mgmProto.PeerConfig) error {
 	if conf.GetSshConfig() != nil {
 		err := e.updateSSH(conf.GetSshConfig())
 		if err != nil {
-			log.Warnf("failed handling SSH server setup %v", e)
+			log.Warnf("failed handling SSH server setup %v", err)
 		}
 	}
 
@@ -494,9 +571,7 @@ func (e *Engine) updateConfig(conf *mgmProto.PeerConfig) error {
 // E.g. when a new peer has been registered and we are allowed to connect to it.
 func (e *Engine) receiveManagementEvents() {
 	go func() {
-		err := e.mgmClient.Sync(func(update *mgmProto.SyncResponse) error {
-			return e.handleSync(update)
-		})
+		err := e.mgmClient.Sync(e.handleSync)
 		if err != nil {
 			// happens if management is unavailable for a long time.
 			// We want to cancel the operation of the whole client
@@ -623,10 +698,15 @@ func (e *Engine) updateNetworkMap(networkMap *mgmProto.NetworkMap) error {
 		log.Errorf("failed to update dns server, err: %v", err)
 	}
 
+	// Test received (upstream) servers for availability right away instead of upon usage.
+	// If no server of a server group responds this will disable the respective handler and retry later.
+	e.dnsServer.ProbeAvailability()
+
 	if e.acl != nil {
 		e.acl.ApplyFiltering(networkMap)
 	}
 	e.networkSerial = serial
+
 	return nil
 }
 
@@ -796,6 +876,26 @@ func (e *Engine) createPeerConn(pubKey string, allowedIPs string) (*peer.Conn, e
 		PreSharedKey: e.config.PreSharedKey,
 	}
 
+	if e.config.RosenpassEnabled && !e.config.RosenpassPermissive {
+		lk := []byte(e.config.WgPrivateKey.PublicKey().String())
+		rk := []byte(wgConfig.RemoteKey)
+		var keyInput []byte
+		if string(lk) > string(rk) {
+			//nolint:gocritic
+			keyInput = append(lk[:16], rk[:16]...)
+		} else {
+			//nolint:gocritic
+			keyInput = append(rk[:16], lk[:16]...)
+		}
+
+		key, err := wgtypes.NewKey(keyInput)
+		if err != nil {
+			return nil, err
+		}
+
+		wgConfig.PreSharedKey = &key
+	}
+
 	// randomize connection timeout
 	timeout := time.Duration(rand.Intn(PeerConnectionTimeoutMax-PeerConnectionTimeoutMin)+PeerConnectionTimeoutMin) * time.Millisecond
 	config := peer.ConnConfig{
@@ -811,6 +911,8 @@ func (e *Engine) createPeerConn(pubKey string, allowedIPs string) (*peer.Conn, e
 		LocalWgPort:          e.config.WgPort,
 		NATExternalIPs:       e.parseNATExternalIPMappings(),
 		UserspaceBind:        e.wgInterface.IsUserspaceBind(),
+		RosenpassPubKey:      e.getRosenpassPubKey(),
+		RosenpassAddr:        e.getRosenpassAddr(),
 	}
 
 	peerConn, err := peer.NewConn(config, e.statusRecorder, e.wgProxyFactory, e.mobileDep.TunAdapter, e.mobileDep.IFaceDiscover)
@@ -842,6 +944,12 @@ func (e *Engine) createPeerConn(pubKey string, allowedIPs string) (*peer.Conn, e
 		return sendSignal(message, e.signal)
 	})
 
+	if e.rpManager != nil {
+
+		peerConn.SetOnConnected(e.rpManager.OnConnected)
+		peerConn.SetOnDisconnected(e.rpManager.OnDisconnected)
+	}
+
 	return peerConn, nil
 }
 
@@ -867,13 +975,21 @@ func (e *Engine) receiveSignalEvents() {
 
 				conn.RegisterProtoSupportMeta(msg.Body.GetFeaturesSupported())
 
+				var rosenpassPubKey []byte
+				rosenpassAddr := ""
+				if msg.GetBody().GetRosenpassConfig() != nil {
+					rosenpassPubKey = msg.GetBody().GetRosenpassConfig().GetRosenpassPubKey()
+					rosenpassAddr = msg.GetBody().GetRosenpassConfig().GetRosenpassServerAddr()
+				}
 				conn.OnRemoteOffer(peer.OfferAnswer{
 					IceCredentials: peer.IceCredentials{
 						UFrag: remoteCred.UFrag,
 						Pwd:   remoteCred.Pwd,
 					},
-					WgListenPort: int(msg.GetBody().GetWgListenPort()),
-					Version:      msg.GetBody().GetNetBirdVersion(),
+					WgListenPort:    int(msg.GetBody().GetWgListenPort()),
+					Version:         msg.GetBody().GetNetBirdVersion(),
+					RosenpassPubKey: rosenpassPubKey,
+					RosenpassAddr:   rosenpassAddr,
 				})
 			case sProto.Body_ANSWER:
 				remoteCred, err := signal.UnMarshalCredential(msg)
@@ -881,15 +997,23 @@ func (e *Engine) receiveSignalEvents() {
 					return err
 				}
 
-				conn.RegisterProtoSupportMeta(msg.Body.GetFeaturesSupported())
+				conn.RegisterProtoSupportMeta(msg.GetBody().GetFeaturesSupported())
 
+				var rosenpassPubKey []byte
+				rosenpassAddr := ""
+				if msg.GetBody().GetRosenpassConfig() != nil {
+					rosenpassPubKey = msg.GetBody().GetRosenpassConfig().GetRosenpassPubKey()
+					rosenpassAddr = msg.GetBody().GetRosenpassConfig().GetRosenpassServerAddr()
+				}
 				conn.OnRemoteAnswer(peer.OfferAnswer{
 					IceCredentials: peer.IceCredentials{
 						UFrag: remoteCred.UFrag,
 						Pwd:   remoteCred.Pwd,
 					},
-					WgListenPort: int(msg.GetBody().GetWgListenPort()),
-					Version:      msg.GetBody().GetNetBirdVersion(),
+					WgListenPort:    int(msg.GetBody().GetWgListenPort()),
+					Version:         msg.GetBody().GetNetBirdVersion(),
+					RosenpassPubKey: rosenpassPubKey,
+					RosenpassAddr:   rosenpassAddr,
 				})
 			case sProto.Body_CANDIDATE:
 				candidate, err := ice.UnmarshalCandidate(msg.GetBody().Payload)
@@ -972,6 +1096,11 @@ func (e *Engine) close() {
 		log.Errorf("failed closing ebpf proxy: %s", err)
 	}
 
+	// stop/restore DNS first so dbus and friends don't complain because of a missing interface
+	if e.dnsServer != nil {
+		e.dnsServer.Stop()
+	}
+
 	log.Debugf("removing Netbird interface %s", e.config.WgIfaceName)
 	if e.wgInterface != nil {
 		if err := e.wgInterface.Close(); err != nil {
@@ -990,15 +1119,15 @@ func (e *Engine) close() {
 		e.routeManager.Stop()
 	}
 
-	if e.dnsServer != nil {
-		e.dnsServer.Stop()
-	}
-
 	if e.firewall != nil {
 		err := e.firewall.Reset()
 		if err != nil {
 			log.Warnf("failed to reset firewall: %s", err)
 		}
+	}
+
+	if e.rpManager != nil {
+		_ = e.rpManager.Close()
 	}
 }
 
@@ -1093,4 +1222,84 @@ func findIPFromInterface(iface *net.Interface) (net.IP, error) {
 		}
 	}
 	return nil, fmt.Errorf("interface %s don't have an ipv4 address", iface.Name)
+}
+
+func (e *Engine) getRosenpassPubKey() []byte {
+	if e.rpManager != nil {
+		return e.rpManager.GetPubKey()
+	}
+	return nil
+}
+
+func (e *Engine) getRosenpassAddr() string {
+	if e.rpManager != nil {
+		return e.rpManager.GetAddress().String()
+	}
+	return ""
+}
+
+func (e *Engine) receiveProbeEvents() {
+	if e.signalProbe != nil {
+		go e.signalProbe.Receive(e.ctx, func() bool {
+			healthy := e.signal.IsHealthy()
+			log.Debugf("received signal probe request, healthy: %t", healthy)
+			return healthy
+		})
+	}
+
+	if e.mgmProbe != nil {
+		go e.mgmProbe.Receive(e.ctx, func() bool {
+			healthy := e.mgmClient.IsHealthy()
+			log.Debugf("received management probe request, healthy: %t", healthy)
+			return healthy
+		})
+	}
+
+	if e.relayProbe != nil {
+		go e.relayProbe.Receive(e.ctx, func() bool {
+			healthy := true
+
+			results := append(e.probeSTUNs(), e.probeTURNs()...)
+			e.statusRecorder.UpdateRelayStates(results)
+
+			// A single failed server will result in a "failed" probe
+			for _, res := range results {
+				if res.Err != nil {
+					healthy = false
+					break
+				}
+			}
+
+			log.Debugf("received relay probe request, healthy: %t", healthy)
+			return healthy
+		})
+	}
+
+	if e.wgProbe != nil {
+		go e.wgProbe.Receive(e.ctx, func() bool {
+			log.Debug("received wg probe request")
+
+			for _, peer := range e.peerConns {
+				key := peer.GetKey()
+				wgStats, err := peer.GetConf().WgConfig.WgInterface.GetStats(key)
+				if err != nil {
+					log.Debugf("failed to get wg stats for peer %s: %s", key, err)
+				}
+				// wgStats could be zero value, in which case we just reset the stats
+				if err := e.statusRecorder.UpdateWireGuardPeerState(key, wgStats); err != nil {
+					log.Debugf("failed to update wg stats for peer %s: %s", key, err)
+				}
+			}
+
+			return true
+		})
+	}
+}
+
+func (e *Engine) probeSTUNs() []relay.ProbeResult {
+	return relay.ProbeAll(e.ctx, relay.ProbeSTUN, e.STUNs)
+}
+
+func (e *Engine) probeTURNs() []relay.ProbeResult {
+	return relay.ProbeAll(e.ctx, relay.ProbeTURN, e.TURNs)
 }

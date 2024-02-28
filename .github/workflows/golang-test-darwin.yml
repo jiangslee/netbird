@@ -20,7 +20,7 @@ jobs:
       - name: Install Go
         uses: actions/setup-go@v4
         with:
-          go-version: "1.20.x"
+          go-version: "1.21.x"
       - name: Checkout code
         uses: actions/checkout@v3
 
@@ -35,5 +35,8 @@ jobs:
       - name: Install modules
         run: go mod tidy
 
+      - name: check git status
+        run: git --no-pager diff --exit-code
+
       - name: Test
-        run: NETBIRD_STORE_ENGINE=${{ matrix.store }} go test -exec 'sudo --preserve-env=CI' -timeout 5m -p 1 ./...
+        run: NETBIRD_STORE_ENGINE=${{ matrix.store }} go test -exec 'sudo --preserve-env=CI,NETBIRD_STORE_ENGINE' -timeout 5m -p 1 ./...
