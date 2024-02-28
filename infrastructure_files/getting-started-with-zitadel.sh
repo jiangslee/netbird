@@ -726,14 +726,14 @@ renderManagementJson() {
     "IdpManagerConfig": {
         "ManagerType": "zitadel",
         "ClientConfig": {
-            "Issuer": "$NETBIRD_HTTP_PROTOCOL://$NETBIRD_DOMAIN",
-            "TokenEndpoint": "$NETBIRD_HTTP_PROTOCOL://$NETBIRD_DOMAIN/oauth/v2/token",
+            "Issuer": "$NETBIRD_HTTP_PROTOCOL://$NETBIRD_DOMAIN:$NETBIRD_PORT",
+            "TokenEndpoint": "$NETBIRD_HTTP_PROTOCOL://$NETBIRD_DOMAIN:$NETBIRD_PORT/oauth/v2/token",
             "ClientID": "$NETBIRD_IDP_MGMT_CLIENT_ID",
             "ClientSecret": "$NETBIRD_IDP_MGMT_CLIENT_SECRET",
             "GrantType": "client_credentials"
         },
         "ExtraConfig": {
-            "ManagementEndpoint": "$NETBIRD_HTTP_PROTOCOL://$NETBIRD_DOMAIN/management/v1"
+            "ManagementEndpoint": "$NETBIRD_HTTP_PROTOCOL://$NETBIRD_DOMAIN:$NETBIRD_PORT/management/v1"
         }
      },
    "DeviceAuthorizationFlow": {
@@ -759,12 +759,12 @@ EOF
 renderDashboardEnv() {
   cat <<EOF
 # Endpoints
-NETBIRD_MGMT_API_ENDPOINT=$NETBIRD_HTTP_PROTOCOL://$NETBIRD_DOMAIN
-NETBIRD_MGMT_GRPC_API_ENDPOINT=$NETBIRD_HTTP_PROTOCOL://$NETBIRD_DOMAIN
+NETBIRD_MGMT_API_ENDPOINT=$NETBIRD_HTTP_PROTOCOL://$NETBIRD_DOMAIN:$NETBIRD_PORT
+NETBIRD_MGMT_GRPC_API_ENDPOINT=$NETBIRD_HTTP_PROTOCOL://$NETBIRD_DOMAIN:$NETBIRD_PORT
 # OIDC
 AUTH_AUDIENCE=$NETBIRD_AUTH_CLIENT_ID
 AUTH_CLIENT_ID=$NETBIRD_AUTH_CLIENT_ID
-AUTH_AUTHORITY=$NETBIRD_HTTP_PROTOCOL://$NETBIRD_DOMAIN
+AUTH_AUTHORITY=$NETBIRD_HTTP_PROTOCOL://$NETBIRD_DOMAIN:$NETBIRD_PORT
 USE_AUTH0=false
 AUTH_SUPPORTED_SCOPES="openid profile email offline_access"
 AUTH_REDIRECT_URI=/nb-auth
