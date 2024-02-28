@@ -482,6 +482,8 @@ read_nb_3478_port() {
     read_nb_3478_port
   fi
   echo "$READ_NETBIRD_3478_PORT"
+}
+
 get_turn_external_ip() {
   TURN_EXTERNAL_IP_CONFIG="#external-ip="
   IP=$(curl -s -4 https://jsonip.com | jq -r '.ip')
@@ -506,7 +508,7 @@ initEnvironment() {
   if [ "$NETBIRD_DOMAIN" == "use-ip" ]; then
     NETBIRD_DOMAIN=$(get_main_ip_address)
     # Default ports
-	  NETBIRD_PORT=443
+    NETBIRD_PORT=443
     NETBIRD_HTTP_PORT=80
     NETBIRD_8080_PORT=8080 # I don’t understand why the caddy service in docker-compose requires this 8080 port
     TURN_LISTENING_PORT=3478
