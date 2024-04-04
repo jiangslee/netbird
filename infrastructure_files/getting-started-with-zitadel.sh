@@ -316,7 +316,16 @@ delete_auto_service_user() {
 
 init_zitadel() {
   echo -e "\nInitializing Zitadel with NetBird's applications\n"
-  INSTANCE_URL="$NETBIRD_HTTP_PROTOCOL://$NETBIRD_DOMAIN:$NETBIRD_PORT"
+
+  INSTANCE_URL="$NETBIRD_HTTP_PROTOCOL://$NETBIRD_DOMAIN"
+
+  if [[ $NETBIRD_HTTP_PROTOCOL == "https" && $NETBIRD_PORT != 443 ]]; then
+    INSTANCE_URL="$INSTANCE_URL:$NETBIRD_PORT"
+  fi
+
+  if [[ $NETBIRD_HTTP_PROTOCOL == "http" && $NETBIRD_HTTP_PORT != 80 ]]; then
+    INSTANCE_URL="$INSTANCE_URL:$NETBIRD_HTTP_PORT"
+  fi
 
   TOKEN_PATH=./machinekey/zitadel-admin-sa.token
 
@@ -445,26 +454,6 @@ read_nb_http_port() {
   echo "$READ_NETBIRD_HTTP_PORT"
 }
 
-check_nb_8080_port() {
-  PORT_8080=$1
-  if [ "$PORT_8080-x" == "-x" ]; then
-    echo "The NETBIRD_8080_PORT variable cannot be empty." > /dev/stderr
-    return 1
-  fi
-  return 0
-}
-
-read_nb_8080_port() {
-  READ_NETBIRD_8080_PORT=""
-  echo -n "Enter the NETBIRD_8080_PORT you want to use for NetBird (e.g. 8080): " > /dev/stderr
-  read -r READ_NETBIRD_8080_PORT < /dev/tty
-  if ! check_nb_8080_port "$READ_NETBIRD_8080_PORT"; then
-    read_nb_8080_port
-  fi
-  echo "$READ_NETBIRD_8080_PORT"
-}
-
-
 check_nb_3478_port() {
   PORT_3478=$1
   if [ "$PORT_3478-x" == "-x" ]; then
@@ -510,7 +499,6 @@ initEnvironment() {
     # Default ports
     NETBIRD_PORT=443
     NETBIRD_HTTP_PORT=80
-    NETBIRD_8080_PORT=8080 # I don’t understand why the caddy service in docker-compose requires this 8080 port
     TURN_LISTENING_PORT=3478
   else
     ZITADEL_EXTERNALSECURE="true"
@@ -522,10 +510,6 @@ initEnvironment() {
 
     if ! check_nb_http_port "$NETBIRD_HTTP_PORT"; then
       NETBIRD_HTTP_PORT=$(read_nb_http_port)
-    fi
-
-    if ! check_nb_http_port "$NETBIRD_8080_PORT"; then
-      NETBIRD_8080_PORT=$(read_nb_8080_port)
     fi
 
     if ! check_nb_3478_port "$TURN_LISTENING_PORT"; then
@@ -583,7 +567,8 @@ initEnvironment() {
   echo -e "\nStarting NetBird services\n"
   $DOCKER_COMPOSE_COMMAND up -d
   echo -e "\nDone!\n"
-  echo "You can access the NetBird dashboard at $NETBIRD_HTTP_PROTOCOL://$NETBIRD_DOMAIN"
+  
+  echo "You can access the NetBird dashboard at $INSTANCE_URL"
   echo "Login with the following credentials:"
   echo "Username: $ZITADEL_ADMIN_USERNAME" | tee .env
   echo "Password: $ZITADEL_ADMIN_PASSWORD" | tee -a .env
@@ -804,7 +789,7 @@ EOF
 
 renderDockerCompose() {
   cat <<EOF
-version: "3.4"
+#  https://docs.docker.com/compose/compose-file/04-version-and-name/#version-top-level-element-optional
 services:
   # Caddy reverse proxy
   caddy:
