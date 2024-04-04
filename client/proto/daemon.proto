@@ -2,6 +2,7 @@ syntax = "proto3";
 
 import "google/protobuf/descriptor.proto";
 import "google/protobuf/timestamp.proto";
+import "google/protobuf/duration.proto";
 
 option go_package = "/proto";
 
@@ -69,6 +70,8 @@ message LoginRequest {
   optional bool serverSSHAllowed = 15;
 
   optional bool rosenpassPermissive = 16;
+
+  repeated string extraIFaceBlacklist = 17;
 }
 
 message LoginResponse {
@@ -142,6 +145,7 @@ message PeerState {
   int64 bytesTx = 14;
   bool rosenpassEnabled = 15;
   repeated string routes = 16;
+  google.protobuf.Duration latency = 17;
 }
 
 // LocalPeerState contains the latest state of the local peer

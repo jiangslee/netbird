@@ -13,6 +13,8 @@ import (
 	"github.com/cenkalti/backoff/v4"
 	"golang.org/x/exp/maps"
 
+	"google.golang.org/protobuf/types/known/durationpb"
+
 	"github.com/netbirdio/netbird/client/internal/auth"
 	"github.com/netbirdio/netbird/client/system"
 
@@ -150,7 +152,8 @@ func (s *Server) Start() error {
 // mechanism to keep the client connected even when the connection is lost.
 // we cancel retry if the client receive a stop or down command, or if disable auto connect is configured.
 func (s *Server) connectWithRetryRuns(ctx context.Context, config *internal.Config, statusRecorder *peer.Status,
-	mgmProbe *internal.Probe, signalProbe *internal.Probe, relayProbe *internal.Probe, wgProbe *internal.Probe) {
+	mgmProbe *internal.Probe, signalProbe *internal.Probe, relayProbe *internal.Probe, wgProbe *internal.Probe,
+) {
 	backOff := getConnectWithBackoff(ctx)
 	retryStarted := false
 
@@ -347,6 +350,11 @@ func (s *Server) Login(callerCtx context.Context, msg *proto.LoginRequest) (*pro
 		port := int(*msg.WireguardPort)
 		inputConfig.WireguardPort = &port
 		s.latestConfigInput.WireguardPort = &port
+	}
+
+	if len(msg.ExtraIFaceBlacklist) > 0 {
+		inputConfig.ExtraIFaceBlackList = msg.ExtraIFaceBlacklist
+		s.latestConfigInput.ExtraIFaceBlackList = msg.ExtraIFaceBlacklist
 	}
 
 	s.mutex.Unlock()
@@ -711,6 +719,7 @@ func toProtoFullStatus(fullStatus peer.FullStatus) *proto.FullStatus {
 			BytesTx:                    peerState.BytesTx,
 			RosenpassEnabled:           peerState.RosenpassEnabled,
 			Routes:                     maps.Keys(peerState.Routes),
+			Latency:                    durationpb.New(peerState.Latency),
 		}
 		pbFullStatus.Peers = append(pbFullStatus.Peers, pbPeerState)
 	}
