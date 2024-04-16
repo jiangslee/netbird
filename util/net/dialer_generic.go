@@ -49,6 +49,10 @@ func RemoveDialerHooks() {
 
 // DialContext wraps the net.Dialer's DialContext method to use the custom connection
 func (d *Dialer) DialContext(ctx context.Context, network, address string) (net.Conn, error) {
+	if CustomRoutingDisabled() {
+		return d.Dialer.DialContext(ctx, network, address)
+	}
+
 	var resolver *net.Resolver
 	if d.Resolver != nil {
 		resolver = d.Resolver
@@ -56,7 +60,7 @@ func (d *Dialer) DialContext(ctx context.Context, network, address string) (net.
 
 	connID := GenerateConnID()
 	if dialerDialHooks != nil {
-		if err := calliDialerHooks(ctx, connID, address, resolver); err != nil {
+		if err := callDialerHooks(ctx, connID, address, resolver); err != nil {
 			log.Errorf("Failed to call dialer hooks: %v", err)
 		}
 	}
@@ -97,7 +101,7 @@ func (c *Conn) Close() error {
 	return err
 }
 
-func calliDialerHooks(ctx context.Context, connID ConnectionID, address string, resolver *net.Resolver) error {
+func callDialerHooks(ctx context.Context, connID ConnectionID, address string, resolver *net.Resolver) error {
 	host, _, err := net.SplitHostPort(address)
 	if err != nil {
 		return fmt.Errorf("split host and port: %w", err)
@@ -120,4 +124,52 @@ func calliDialerHooks(ctx context.Context, connID ConnectionID, address string, 
 	}
 
 	return result.ErrorOrNil()
+}
+
+func DialUDP(network string, laddr, raddr *net.UDPAddr) (*net.UDPConn, error) {
+	if CustomRoutingDisabled() {
+		return net.DialUDP(network, laddr, raddr)
+	}
+
+	dialer := NewDialer()
+	dialer.LocalAddr = laddr
+
+	conn, err := dialer.Dial(network, raddr.String())
+	if err != nil {
+		return nil, fmt.Errorf("dialing UDP %s: %w", raddr.String(), err)
+	}
+
+	udpConn, ok := conn.(*Conn).Conn.(*net.UDPConn)
+	if !ok {
+		if err := conn.Close(); err != nil {
+			log.Errorf("Failed to close connection: %v", err)
+		}
+		return nil, fmt.Errorf("expected UDP connection, got different type: %T", conn)
+	}
+
+	return udpConn, nil
+}
+
+func DialTCP(network string, laddr, raddr *net.TCPAddr) (*net.TCPConn, error) {
+	if CustomRoutingDisabled() {
+		return net.DialTCP(network, laddr, raddr)
+	}
+
+	dialer := NewDialer()
+	dialer.LocalAddr = laddr
+
+	conn, err := dialer.Dial(network, raddr.String())
+	if err != nil {
+		return nil, fmt.Errorf("dialing TCP %s: %w", raddr.String(), err)
+	}
+
+	tcpConn, ok := conn.(*Conn).Conn.(*net.TCPConn)
+	if !ok {
+		if err := conn.Close(); err != nil {
+			log.Errorf("Failed to close connection: %v", err)
+		}
+		return nil, fmt.Errorf("expected TCP connection, got different type: %T", conn)
+	}
+
+	return tcpConn, nil
 }
