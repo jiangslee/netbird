@@ -15,14 +15,14 @@ import (
 
 	"google.golang.org/protobuf/types/known/durationpb"
 
-	"github.com/netbirdio/netbird/client/internal/auth"
-	"github.com/netbirdio/netbird/client/system"
-
 	log "github.com/sirupsen/logrus"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
 	gstatus "google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
+
+	"github.com/netbirdio/netbird/client/internal/auth"
+	"github.com/netbirdio/netbird/client/system"
 
 	"github.com/netbirdio/netbird/client/internal"
 	"github.com/netbirdio/netbird/client/internal/peer"
@@ -36,7 +36,7 @@ const (
 	maxRetryIntervalVar     = "NB_CONN_MAX_RETRY_INTERVAL_TIME"
 	maxRetryTimeVar         = "NB_CONN_MAX_RETRY_TIME_TIME"
 	retryMultiplierVar      = "NB_CONN_RETRY_MULTIPLIER"
-	defaultInitialRetryTime = 14 * 24 * time.Hour
+	defaultInitialRetryTime = 30 * time.Minute
 	defaultMaxRetryInterval = 60 * time.Minute
 	defaultMaxRetryTime     = 14 * 24 * time.Hour
 	defaultRetryMultiplier  = 1.7
@@ -56,6 +56,8 @@ type Server struct {
 	mutex  sync.Mutex
 	config *internal.Config
 	proto.UnimplementedDaemonServiceServer
+
+	connectClient *internal.ConnectClient
 
 	statusRecorder *peer.Status
 	sessionWatcher *internal.SessionWatcher
@@ -182,7 +184,8 @@ func (s *Server) connectWithRetryRuns(ctx context.Context, config *internal.Conf
 
 	runOperation := func() error {
 		log.Tracef("running client connection")
-		err := internal.RunClientWithProbes(ctx, config, statusRecorder, mgmProbe, signalProbe, relayProbe, wgProbe)
+		s.connectClient = internal.NewConnectClient(ctx, config, statusRecorder)
+		err := s.connectClient.RunWithProbes(mgmProbe, signalProbe, relayProbe, wgProbe)
 		if err != nil {
 			log.Debugf("run client connection exited with error: %v. Will retry in the background", err)
 		}
@@ -352,9 +355,20 @@ func (s *Server) Login(callerCtx context.Context, msg *proto.LoginRequest) (*pro
 		s.latestConfigInput.WireguardPort = &port
 	}
 
+	if msg.NetworkMonitor != nil {
+		inputConfig.NetworkMonitor = msg.NetworkMonitor
+		s.latestConfigInput.NetworkMonitor = msg.NetworkMonitor
+	}
+
 	if len(msg.ExtraIFaceBlacklist) > 0 {
 		inputConfig.ExtraIFaceBlackList = msg.ExtraIFaceBlacklist
 		s.latestConfigInput.ExtraIFaceBlackList = msg.ExtraIFaceBlacklist
+	}
+
+	if msg.DnsRouteInterval != nil {
+		duration := msg.DnsRouteInterval.AsDuration()
+		inputConfig.DNSRouteInterval = &duration
+		s.latestConfigInput.DNSRouteInterval = &duration
 	}
 
 	s.mutex.Unlock()
@@ -654,14 +668,19 @@ func (s *Server) GetConfig(_ context.Context, _ *proto.GetConfigRequest) (*proto
 	}
 
 	return &proto.GetConfigResponse{
-		ManagementUrl: managementURL,
-		AdminURL:      adminURL,
-		ConfigFile:    s.latestConfigInput.ConfigPath,
-		LogFile:       s.logFile,
-		PreSharedKey:  preSharedKey,
+		ManagementUrl:       managementURL,
+		ConfigFile:          s.latestConfigInput.ConfigPath,
+		LogFile:             s.logFile,
+		PreSharedKey:        preSharedKey,
+		AdminURL:            adminURL,
+		InterfaceName:       s.config.WgIface,
+		WireguardPort:       int64(s.config.WgPort),
+		DisableAutoConnect:  s.config.DisableAutoConnect,
+		ServerSSHAllowed:    *s.config.ServerSSHAllowed,
+		RosenpassEnabled:    s.config.RosenpassEnabled,
+		RosenpassPermissive: s.config.RosenpassPermissive,
 	}, nil
 }
-
 func (s *Server) onSessionExpire() {
 	if runtime.GOOS != "windows" {
 		isUIActive := internal.CheckUIApp()

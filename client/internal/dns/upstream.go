@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"net"
-	"runtime"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -79,6 +78,10 @@ func (u *upstreamResolverBase) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 	}()
 
 	log.WithField("question", r.Question[0]).Trace("received an upstream question")
+	// set the EDNS0 buffer size to 4096 bytes to support larger dns records
+	if r.Extra == nil {
+		r.SetEdns0(4096, true)
+	}
 
 	select {
 	case <-u.ctx.Done():
@@ -260,13 +263,10 @@ func (u *upstreamResolverBase) disable(err error) {
 		return
 	}
 
-	// todo test the deactivation logic, it seems to affect the client
-	if runtime.GOOS != "ios" {
-		log.Warnf("Upstream resolving is Disabled for %v", reactivatePeriod)
-		u.deactivate(err)
-		u.disabled = true
-		go u.waitUntilResponse()
-	}
+	log.Warnf("Upstream resolving is Disabled for %v", reactivatePeriod)
+	u.deactivate(err)
+	u.disabled = true
+	go u.waitUntilResponse()
 }
 
 func (u *upstreamResolverBase) testNameserver(server string) error {

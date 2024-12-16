@@ -1,13 +1,20 @@
 package server
 
 import (
+	"slices"
+
 	"github.com/netbirdio/netbird/management/server/activity"
+	nbpeer "github.com/netbirdio/netbird/management/server/peer"
 	"github.com/netbirdio/netbird/management/server/posture"
 	"github.com/netbirdio/netbird/management/server/status"
 )
 
+const (
+	errMsgPostureAdminOnly = "only users with admin power are allowed to view posture checks"
+)
+
 func (am *DefaultAccountManager) GetPostureChecks(accountID, postureChecksID, userID string) (*posture.Checks, error) {
-	unlock := am.Store.AcquireAccountLock(accountID)
+	unlock := am.Store.AcquireAccountWriteLock(accountID)
 	defer unlock()
 
 	account, err := am.Store.GetAccount(accountID)
@@ -21,7 +28,7 @@ func (am *DefaultAccountManager) GetPostureChecks(accountID, postureChecksID, us
 	}
 
 	if !user.HasAdminPower() {
-		return nil, status.Errorf(status.PermissionDenied, "only users with admin power are allowed to view posture checks")
+		return nil, status.Errorf(status.PermissionDenied, errMsgPostureAdminOnly)
 	}
 
 	for _, postureChecks := range account.PostureChecks {
@@ -34,7 +41,7 @@ func (am *DefaultAccountManager) GetPostureChecks(accountID, postureChecksID, us
 }
 
 func (am *DefaultAccountManager) SavePostureChecks(accountID, userID string, postureChecks *posture.Checks) error {
-	unlock := am.Store.AcquireAccountLock(accountID)
+	unlock := am.Store.AcquireAccountWriteLock(accountID)
 	defer unlock()
 
 	account, err := am.Store.GetAccount(accountID)
@@ -48,11 +55,11 @@ func (am *DefaultAccountManager) SavePostureChecks(accountID, userID string, pos
 	}
 
 	if !user.HasAdminPower() {
-		return status.Errorf(status.PermissionDenied, "only users with admin power are allowed to view posture checks")
+		return status.Errorf(status.PermissionDenied, errMsgPostureAdminOnly)
 	}
 
 	if err := postureChecks.Validate(); err != nil {
-		return status.Errorf(status.BadRequest, err.Error())
+		return status.Errorf(status.InvalidArgument, err.Error())
 	}
 
 	exists, uniqName := am.savePostureChecks(account, postureChecks)
@@ -81,7 +88,7 @@ func (am *DefaultAccountManager) SavePostureChecks(accountID, userID string, pos
 }
 
 func (am *DefaultAccountManager) DeletePostureChecks(accountID, postureChecksID, userID string) error {
-	unlock := am.Store.AcquireAccountLock(accountID)
+	unlock := am.Store.AcquireAccountWriteLock(accountID)
 	defer unlock()
 
 	account, err := am.Store.GetAccount(accountID)
@@ -95,7 +102,7 @@ func (am *DefaultAccountManager) DeletePostureChecks(accountID, postureChecksID,
 	}
 
 	if !user.HasAdminPower() {
-		return status.Errorf(status.PermissionDenied, "only users with admin power are allowed to view posture checks")
+		return status.Errorf(status.PermissionDenied, errMsgPostureAdminOnly)
 	}
 
 	postureChecks, err := am.deletePostureChecks(account, postureChecksID)
@@ -113,7 +120,7 @@ func (am *DefaultAccountManager) DeletePostureChecks(accountID, postureChecksID,
 }
 
 func (am *DefaultAccountManager) ListPostureChecks(accountID, userID string) ([]*posture.Checks, error) {
-	unlock := am.Store.AcquireAccountLock(accountID)
+	unlock := am.Store.AcquireAccountWriteLock(accountID)
 	defer unlock()
 
 	account, err := am.Store.GetAccount(accountID)
@@ -127,7 +134,7 @@ func (am *DefaultAccountManager) ListPostureChecks(accountID, userID string) ([]
 	}
 
 	if !user.HasAdminPower() {
-		return nil, status.Errorf(status.PermissionDenied, "only users with admin power are allowed to view posture checks")
+		return nil, status.Errorf(status.PermissionDenied, errMsgPostureAdminOnly)
 	}
 
 	return account.PostureChecks, nil
@@ -175,4 +182,59 @@ func (am *DefaultAccountManager) deletePostureChecks(account *Account, postureCh
 	account.PostureChecks = append(account.PostureChecks[:postureChecksIdx], account.PostureChecks[postureChecksIdx+1:]...)
 
 	return postureChecks, nil
+}
+
+// getPeerPostureChecks returns the posture checks applied for a given peer.
+func (am *DefaultAccountManager) getPeerPostureChecks(account *Account, peer *nbpeer.Peer) []*posture.Checks {
+	peerPostureChecks := make(map[string]posture.Checks)
+
+	if len(account.PostureChecks) == 0 {
+		return nil
+	}
+
+	for _, policy := range account.Policies {
+		if !policy.Enabled {
+			continue
+		}
+
+		if isPeerInPolicySourceGroups(peer.ID, account, policy) {
+			addPolicyPostureChecks(account, policy, peerPostureChecks)
+		}
+	}
+
+	postureChecksList := make([]*posture.Checks, 0, len(peerPostureChecks))
+	for _, check := range peerPostureChecks {
+		checkCopy := check
+		postureChecksList = append(postureChecksList, &checkCopy)
+	}
+
+	return postureChecksList
+}
+
+// isPeerInPolicySourceGroups checks if a peer is present in any of the policy rule source groups.
+func isPeerInPolicySourceGroups(peerID string, account *Account, policy *Policy) bool {
+	for _, rule := range policy.Rules {
+		if !rule.Enabled {
+			continue
+		}
+
+		for _, sourceGroup := range rule.Sources {
+			group, ok := account.Groups[sourceGroup]
+			if ok && slices.Contains(group.Peers, peerID) {
+				return true
+			}
+		}
+	}
+
+	return false
+}
+
+func addPolicyPostureChecks(account *Account, policy *Policy, peerPostureChecks map[string]posture.Checks) {
+	for _, sourcePostureCheckID := range policy.SourcePostureChecks {
+		for _, postureCheck := range account.PostureChecks {
+			if postureCheck.ID == sourcePostureCheckID {
+				peerPostureChecks[sourcePostureCheckID] = *postureCheck
+			}
+		}
+	}
 }

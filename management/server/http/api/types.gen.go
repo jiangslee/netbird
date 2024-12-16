@@ -225,6 +225,9 @@ type Checks struct {
 
 	// PeerNetworkRangeCheck Posture check for allow or deny access based on peer local network addresses
 	PeerNetworkRangeCheck *PeerNetworkRangeCheck `json:"peer_network_range_check,omitempty"`
+
+	// ProcessCheck Posture Check for binaries exist and are running in the peer’s system
+	ProcessCheck *ProcessCheck `json:"process_check,omitempty"`
 }
 
 // City Describe city geographical location information
@@ -523,6 +526,9 @@ type Peer struct {
 	// Os Peer's operating system and version
 	Os string `json:"os"`
 
+	// SerialNumber System serial number
+	SerialNumber string `json:"serial_number"`
+
 	// SshEnabled Indicates whether SSH server is enabled on this peer
 	SshEnabled bool `json:"ssh_enabled"`
 
@@ -591,6 +597,9 @@ type PeerBase struct {
 
 	// Os Peer's operating system and version
 	Os string `json:"os"`
+
+	// SerialNumber System serial number
+	SerialNumber string `json:"serial_number"`
 
 	// SshEnabled Indicates whether SSH server is enabled on this peer
 	SshEnabled bool `json:"ssh_enabled"`
@@ -663,6 +672,9 @@ type PeerBatch struct {
 
 	// Os Peer's operating system and version
 	Os string `json:"os"`
+
+	// SerialNumber System serial number
+	SerialNumber string `json:"serial_number"`
 
 	// SshEnabled Indicates whether SSH server is enabled on this peer
 	SshEnabled bool `json:"ssh_enabled"`
@@ -940,10 +952,30 @@ type PostureCheckUpdate struct {
 	Name string `json:"name"`
 }
 
+// Process Describes the operational activity within a peer's system.
+type Process struct {
+	// LinuxPath Path to the process executable file in a Linux operating system
+	LinuxPath *string `json:"linux_path,omitempty"`
+
+	// MacPath Path to the process executable file in a Mac operating system
+	MacPath *string `json:"mac_path,omitempty"`
+
+	// WindowsPath Path to the process executable file in a Windows operating system
+	WindowsPath *string `json:"windows_path,omitempty"`
+}
+
+// ProcessCheck Posture Check for binaries exist and are running in the peer’s system
+type ProcessCheck struct {
+	Processes []Process `json:"processes"`
+}
+
 // Route defines model for Route.
 type Route struct {
 	// Description Route description
 	Description string `json:"description"`
+
+	// Domains Domain list to be dynamically resolved. Conflicts with network
+	Domains *[]string `json:"domains,omitempty"`
 
 	// Enabled Route status
 	Enabled bool `json:"enabled"`
@@ -954,19 +986,22 @@ type Route struct {
 	// Id Route Id
 	Id string `json:"id"`
 
+	// KeepRoute Indicate if the route should be kept after a domain doesn't resolve that IP anymore
+	KeepRoute bool `json:"keep_route"`
+
 	// Masquerade Indicate if peer should masquerade traffic to this route's prefix
 	Masquerade bool `json:"masquerade"`
 
 	// Metric Route metric number. Lowest number has higher priority
 	Metric int `json:"metric"`
 
-	// Network Network range in CIDR format
-	Network string `json:"network"`
+	// Network Network range in CIDR format, Conflicts with domains
+	Network *string `json:"network,omitempty"`
 
 	// NetworkId Route network identifier, to group HA routes
 	NetworkId string `json:"network_id"`
 
-	// NetworkType Network type indicating if it is IPv4 or IPv6
+	// NetworkType Network type indicating if it is a domain route or a IPv4/IPv6 route
 	NetworkType string `json:"network_type"`
 
 	// Peer Peer Identifier associated with route. This property can not be set together with `peer_groups`
@@ -981,11 +1016,17 @@ type RouteRequest struct {
 	// Description Route description
 	Description string `json:"description"`
 
+	// Domains Domain list to be dynamically resolved. Conflicts with network
+	Domains *[]string `json:"domains,omitempty"`
+
 	// Enabled Route status
 	Enabled bool `json:"enabled"`
 
 	// Groups Group IDs containing routing peers
 	Groups []string `json:"groups"`
+
+	// KeepRoute Indicate if the route should be kept after a domain doesn't resolve that IP anymore
+	KeepRoute bool `json:"keep_route"`
 
 	// Masquerade Indicate if peer should masquerade traffic to this route's prefix
 	Masquerade bool `json:"masquerade"`
@@ -993,8 +1034,8 @@ type RouteRequest struct {
 	// Metric Route metric number. Lowest number has higher priority
 	Metric int `json:"metric"`
 
-	// Network Network range in CIDR format
-	Network string `json:"network"`
+	// Network Network range in CIDR format, Conflicts with domains
+	Network *string `json:"network,omitempty"`
 
 	// NetworkId Route network identifier, to group HA routes
 	NetworkId string `json:"network_id"`

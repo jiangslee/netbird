@@ -12,6 +12,7 @@ import (
 
 	firewall "github.com/netbirdio/netbird/client/firewall/manager"
 	"github.com/netbirdio/netbird/client/internal/peer"
+	"github.com/netbirdio/netbird/client/internal/routemanager/systemops"
 	"github.com/netbirdio/netbird/iface"
 	"github.com/netbirdio/netbird/route"
 )
@@ -19,7 +20,7 @@ import (
 type defaultServerRouter struct {
 	mux            sync.Mutex
 	ctx            context.Context
-	routes         map[string]*route.Route
+	routes         map[route.ID]*route.Route
 	firewall       firewall.Manager
 	wgInterface    *iface.WGIface
 	statusRecorder *peer.Status
@@ -28,15 +29,15 @@ type defaultServerRouter struct {
 func newServerRouter(ctx context.Context, wgInterface *iface.WGIface, firewall firewall.Manager, statusRecorder *peer.Status) (serverRouter, error) {
 	return &defaultServerRouter{
 		ctx:            ctx,
-		routes:         make(map[string]*route.Route),
+		routes:         make(map[route.ID]*route.Route),
 		firewall:       firewall,
 		wgInterface:    wgInterface,
 		statusRecorder: statusRecorder,
 	}, nil
 }
 
-func (m *defaultServerRouter) updateRoutes(routesMap map[string]*route.Route) error {
-	serverRoutesToRemove := make([]string, 0)
+func (m *defaultServerRouter) updateRoutes(routesMap map[route.ID]*route.Route) error {
+	serverRoutesToRemove := make([]route.ID, 0)
 
 	for routeID := range m.routes {
 		update, found := routesMap[routeID]
@@ -70,7 +71,7 @@ func (m *defaultServerRouter) updateRoutes(routesMap map[string]*route.Route) er
 	}
 
 	if len(m.routes) > 0 {
-		err := enableIPForwarding()
+		err := systemops.EnableIPForwarding()
 		if err != nil {
 			return err
 		}
@@ -88,7 +89,7 @@ func (m *defaultServerRouter) removeFromServerNetwork(route *route.Route) error 
 		m.mux.Lock()
 		defer m.mux.Unlock()
 
-		routerPair, err := routeToRouterPair(m.wgInterface.Address().Masked().String(), route)
+		routerPair, err := routeToRouterPair(route)
 		if err != nil {
 			return fmt.Errorf("parse prefix: %w", err)
 		}
@@ -117,7 +118,7 @@ func (m *defaultServerRouter) addToServerNetwork(route *route.Route) error {
 		m.mux.Lock()
 		defer m.mux.Unlock()
 
-		routerPair, err := routeToRouterPair(m.wgInterface.Address().Masked().String(), route)
+		routerPair, err := routeToRouterPair(route)
 		if err != nil {
 			return fmt.Errorf("parse prefix: %w", err)
 		}
@@ -133,7 +134,13 @@ func (m *defaultServerRouter) addToServerNetwork(route *route.Route) error {
 		if state.Routes == nil {
 			state.Routes = map[string]struct{}{}
 		}
-		state.Routes[route.Network.String()] = struct{}{}
+
+		routeStr := route.Network.String()
+		if route.IsDynamic() {
+			routeStr = route.Domains.SafeString()
+		}
+		state.Routes[routeStr] = struct{}{}
+
 		m.statusRecorder.UpdateLocalPeerState(state)
 
 		return nil
@@ -144,7 +151,7 @@ func (m *defaultServerRouter) cleanUp() {
 	m.mux.Lock()
 	defer m.mux.Unlock()
 	for _, r := range m.routes {
-		routerPair, err := routeToRouterPair(m.wgInterface.Address().Masked().String(), r)
+		routerPair, err := routeToRouterPair(r)
 		if err != nil {
 			log.Errorf("Failed to convert route to router pair: %v", err)
 			continue
@@ -162,15 +169,27 @@ func (m *defaultServerRouter) cleanUp() {
 	m.statusRecorder.UpdateLocalPeerState(state)
 }
 
-func routeToRouterPair(source string, route *route.Route) (firewall.RouterPair, error) {
-	parsed, err := netip.ParsePrefix(source)
-	if err != nil {
-		return firewall.RouterPair{}, err
+func routeToRouterPair(route *route.Route) (firewall.RouterPair, error) {
+	// TODO: add ipv6
+	source := getDefaultPrefix(route.Network)
+
+	destination := route.Network.Masked().String()
+	if route.IsDynamic() {
+		// TODO: add ipv6
+		destination = "0.0.0.0/0"
 	}
+
 	return firewall.RouterPair{
-		ID:          route.ID,
-		Source:      parsed.String(),
-		Destination: route.Network.Masked().String(),
+		ID:          string(route.ID),
+		Source:      source.String(),
+		Destination: destination,
 		Masquerade:  route.Masquerade,
 	}, nil
+}
+
+func getDefaultPrefix(prefix netip.Prefix) netip.Prefix {
+	if prefix.Addr().Is6() {
+		return netip.PrefixFrom(netip.IPv6Unspecified(), 0)
+	}
+	return netip.PrefixFrom(netip.IPv4Unspecified(), 0)
 }

@@ -3,6 +3,7 @@ package iface
 import (
 	"fmt"
 	"net"
+	"net/netip"
 	"testing"
 	"time"
 
@@ -40,7 +41,7 @@ func TestWGIface_UpdateAddr(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	iface, err := NewWGIFace(ifaceName, addr, wgPort, key, DefaultMTU, newNet, nil)
+	iface, err := NewWGIFace(ifaceName, addr, wgPort, key, DefaultMTU, newNet, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -79,8 +80,19 @@ func TestWGIface_UpdateAddr(t *testing.T) {
 		t.Error(err)
 	}
 
-	assert.Equal(t, addr, addrs[0].String())
+	var found bool
+	for _, a := range addrs {
+		prefix, err := netip.ParsePrefix(a.String())
+		assert.NoError(t, err)
+		if prefix.Addr().Is4() {
+			found = true
+			assert.Equal(t, addr, prefix.String())
+		}
+	}
 
+	if !found {
+		t.Fatal("v4 address not found")
+	}
 }
 
 func getIfaceAddrs(ifaceName string) ([]net.Addr, error) {
@@ -102,7 +114,7 @@ func Test_CreateInterface(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	iface, err := NewWGIFace(ifaceName, wgIP, 33100, key, DefaultMTU, newNet, nil)
+	iface, err := NewWGIFace(ifaceName, wgIP, 33100, key, DefaultMTU, newNet, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -137,7 +149,7 @@ func Test_Close(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	iface, err := NewWGIFace(ifaceName, wgIP, wgPort, key, DefaultMTU, newNet, nil)
+	iface, err := NewWGIFace(ifaceName, wgIP, wgPort, key, DefaultMTU, newNet, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -170,7 +182,7 @@ func Test_ConfigureInterface(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	iface, err := NewWGIFace(ifaceName, wgIP, wgPort, key, DefaultMTU, newNet, nil)
+	iface, err := NewWGIFace(ifaceName, wgIP, wgPort, key, DefaultMTU, newNet, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -218,7 +230,7 @@ func Test_UpdatePeer(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	iface, err := NewWGIFace(ifaceName, wgIP, 33100, key, DefaultMTU, newNet, nil)
+	iface, err := NewWGIFace(ifaceName, wgIP, 33100, key, DefaultMTU, newNet, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -279,7 +291,7 @@ func Test_RemovePeer(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	iface, err := NewWGIFace(ifaceName, wgIP, 33100, key, DefaultMTU, newNet, nil)
+	iface, err := NewWGIFace(ifaceName, wgIP, 33100, key, DefaultMTU, newNet, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -333,7 +345,7 @@ func Test_ConnectPeers(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	iface1, err := NewWGIFace(peer1ifaceName, peer1wgIP, peer1wgPort, peer1Key.String(), DefaultMTU, newNet, nil)
+	iface1, err := NewWGIFace(peer1ifaceName, peer1wgIP, peer1wgPort, peer1Key.String(), DefaultMTU, newNet, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -356,7 +368,7 @@ func Test_ConnectPeers(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	iface2, err := NewWGIFace(peer2ifaceName, peer2wgIP, peer2wgPort, peer2Key.String(), DefaultMTU, newNet, nil)
+	iface2, err := NewWGIFace(peer2ifaceName, peer2wgIP, peer2wgPort, peer2Key.String(), DefaultMTU, newNet, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

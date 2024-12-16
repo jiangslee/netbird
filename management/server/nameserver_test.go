@@ -766,10 +766,11 @@ func createNSManager(t *testing.T) (*DefaultAccountManager, error) {
 func createNSStore(t *testing.T) (Store, error) {
 	t.Helper()
 	dataDir := t.TempDir()
-	store, err := NewStoreFromJson(dataDir, nil)
+	store, cleanUp, err := NewTestStoreFromJson(dataDir)
 	if err != nil {
 		return nil, err
 	}
+	t.Cleanup(cleanUp)
 
 	return store, nil
 }
@@ -850,11 +851,11 @@ func initTestNSAccount(t *testing.T, am *DefaultAccountManager) (*Account, error
 		return nil, err
 	}
 
-	_, _, err = am.AddPeer("", userID, peer1)
+	_, _, _, err = am.AddPeer("", userID, peer1)
 	if err != nil {
 		return nil, err
 	}
-	_, _, err = am.AddPeer("", userID, peer2)
+	_, _, _, err = am.AddPeer("", userID, peer2)
 	if err != nil {
 		return nil, err
 	}

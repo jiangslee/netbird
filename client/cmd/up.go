@@ -7,11 +7,13 @@ import (
 	"net/netip"
 	"runtime"
 	"strings"
+	"time"
 
 	log "github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
 	"google.golang.org/grpc/codes"
 	gstatus "google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/durationpb"
 
 	"github.com/netbirdio/netbird/client/internal"
 	"github.com/netbirdio/netbird/client/internal/peer"
@@ -40,7 +42,12 @@ func init() {
 	upCmd.PersistentFlags().BoolVarP(&foregroundMode, "foreground-mode", "F", false, "start service in foreground")
 	upCmd.PersistentFlags().StringVar(&interfaceName, interfaceNameFlag, iface.WgInterfaceDefault, "Wireguard interface name")
 	upCmd.PersistentFlags().Uint16Var(&wireguardPort, wireguardPortFlag, iface.DefaultWgPort, "Wireguard interface listening port")
+	upCmd.PersistentFlags().BoolVarP(&networkMonitor, networkMonitorFlag, "N", networkMonitor,
+		`Manage network monitoring. Defaults to true on Windows and macOS, false on Linux. `+
+			`E.g. --network-monitor=false to disable or --network-monitor=true to enable.`,
+	)
 	upCmd.PersistentFlags().StringSliceVar(&extraIFaceBlackList, extraIFaceBlackListFlag, nil, "Extra list of default interfaces to ignore for listening")
+	upCmd.PersistentFlags().DurationVar(&dnsRouteInterval, dnsRouteIntervalFlag, time.Minute, "DNS route update interval")
 }
 
 func upFunc(cmd *cobra.Command, args []string) error {
@@ -116,6 +123,10 @@ func runInForegroundMode(ctx context.Context, cmd *cobra.Command) error {
 		ic.WireguardPort = &p
 	}
 
+	if cmd.Flag(networkMonitorFlag).Changed {
+		ic.NetworkMonitor = &networkMonitor
+	}
+
 	if rootCmd.PersistentFlags().Changed(preSharedKeyFlag) {
 		ic.PreSharedKey = &preSharedKey
 	}
@@ -130,6 +141,10 @@ func runInForegroundMode(ctx context.Context, cmd *cobra.Command) error {
 		if !autoConnectDisabled {
 			cmd.Println("Autoconnect has been enabled. The client will connect automatically when the service starts.")
 		}
+	}
+
+	if cmd.Flag(dnsRouteIntervalFlag).Changed {
+		ic.DNSRouteInterval = &dnsRouteInterval
 	}
 
 	config, err := internal.UpdateOrCreateConfig(ic)
@@ -147,7 +162,9 @@ func runInForegroundMode(ctx context.Context, cmd *cobra.Command) error {
 	var cancel context.CancelFunc
 	ctx, cancel = context.WithCancel(ctx)
 	SetupCloseHandler(ctx, cancel)
-	return internal.RunClient(ctx, config, peer.NewRecorder(config.ManagementURL.String()))
+
+	connectClient := internal.NewConnectClient(ctx, config, peer.NewRecorder(config.ManagementURL.String()))
+	return connectClient.Run()
 }
 
 func runInDaemonMode(ctx context.Context, cmd *cobra.Command) error {
@@ -224,6 +241,14 @@ func runInDaemonMode(ctx context.Context, cmd *cobra.Command) error {
 	if cmd.Flag(wireguardPortFlag).Changed {
 		wp := int64(wireguardPort)
 		loginRequest.WireguardPort = &wp
+	}
+
+	if cmd.Flag(networkMonitorFlag).Changed {
+		loginRequest.NetworkMonitor = &networkMonitor
+	}
+
+	if cmd.Flag(dnsRouteIntervalFlag).Changed {
+		loginRequest.DnsRouteInterval = durationpb.New(dnsRouteInterval)
 	}
 
 	var loginErr error
