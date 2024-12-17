@@ -846,6 +846,7 @@ services:
     volumes:
       - netbird_caddy_data:/data
       - ./Caddyfile:/etc/caddy/Caddyfile
+      - ./certs:/etc/caddy/ccerts
   # UI dashboard
   dashboard:
     image: netbirdio/dashboard:latest
