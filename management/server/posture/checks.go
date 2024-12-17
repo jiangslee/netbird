@@ -1,13 +1,12 @@
 package posture
 
 import (
+	"context"
 	"errors"
 	"net/netip"
 	"regexp"
 
 	"github.com/hashicorp/go-version"
-	"github.com/rs/xid"
-
 	"github.com/netbirdio/netbird/management/server/http/api"
 	nbpeer "github.com/netbirdio/netbird/management/server/peer"
 	"github.com/netbirdio/netbird/management/server/status"
@@ -31,7 +30,7 @@ var (
 // Check represents an interface for performing a check on a peer.
 type Check interface {
 	Name() string
-	Check(peer nbpeer.Peer) (bool, error)
+	Check(ctx context.Context, peer nbpeer.Peer) (bool, error)
 	Validate() error
 }
 
@@ -171,10 +170,6 @@ func NewChecksFromAPIPostureCheckUpdate(source api.PostureCheckUpdate, postureCh
 }
 
 func buildPostureCheck(postureChecksID string, name string, description string, checks api.Checks) (*Checks, error) {
-	if postureChecksID == "" {
-		postureChecksID = xid.New().String()
-	}
-
 	postureChecks := Checks{
 		ID:          postureChecksID,
 		Name:        name,

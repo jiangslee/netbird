@@ -13,6 +13,7 @@ import (
 	log "github.com/sirupsen/logrus"
 
 	nberrors "github.com/netbirdio/netbird/client/errors"
+	"github.com/netbirdio/netbird/client/iface"
 	"github.com/netbirdio/netbird/client/internal/peer"
 	"github.com/netbirdio/netbird/client/internal/routemanager/refcounter"
 	"github.com/netbirdio/netbird/client/internal/routemanager/util"
@@ -47,6 +48,8 @@ type Route struct {
 	currentPeerKey       string
 	cancel               context.CancelFunc
 	statusRecorder       *peer.Status
+	wgInterface          iface.IWGIface
+	resolverAddr         string
 }
 
 func NewRoute(
@@ -55,6 +58,8 @@ func NewRoute(
 	allowedIPsRefCounter *refcounter.AllowedIPsRefCounter,
 	interval time.Duration,
 	statusRecorder *peer.Status,
+	wgInterface iface.IWGIface,
+	resolverAddr string,
 ) *Route {
 	return &Route{
 		route:                rt,
@@ -63,6 +68,8 @@ func NewRoute(
 		interval:             interval,
 		dynamicDomains:       domainMap{},
 		statusRecorder:       statusRecorder,
+		wgInterface:          wgInterface,
+		resolverAddr:         resolverAddr,
 	}
 }
 
@@ -189,9 +196,14 @@ func (r *Route) startResolver(ctx context.Context) {
 }
 
 func (r *Route) update(ctx context.Context) error {
-	if resolved, err := r.resolveDomains(); err != nil {
-		return fmt.Errorf("resolve domains: %w", err)
-	} else if err := r.updateDynamicRoutes(ctx, resolved); err != nil {
+	resolved, err := r.resolveDomains()
+	if err != nil {
+		if len(resolved) == 0 {
+			return fmt.Errorf("resolve domains: %w", err)
+		}
+		log.Warnf("Failed to resolve domains: %v", err)
+	}
+	if err := r.updateDynamicRoutes(ctx, resolved); err != nil {
 		return fmt.Errorf("update dynamic routes: %w", err)
 	}
 
@@ -223,11 +235,17 @@ func (r *Route) resolve(results chan resolveResult) {
 		wg.Add(1)
 		go func(domain domain.Domain) {
 			defer wg.Done()
-			ips, err := net.LookupIP(string(domain))
+
+			ips, err := r.getIPsFromResolver(domain)
 			if err != nil {
-				results <- resolveResult{domain: domain, err: fmt.Errorf("resolve d %s: %w", domain.SafeString(), err)}
-				return
+				log.Tracef("Failed to resolve domain %s with private resolver: %v", domain.SafeString(), err)
+				ips, err = net.LookupIP(string(domain))
+				if err != nil {
+					results <- resolveResult{domain: domain, err: fmt.Errorf("resolve d %s: %w", domain.SafeString(), err)}
+					return
+				}
 			}
+
 			for _, ip := range ips {
 				prefix, err := util.GetPrefixFromIP(ip)
 				if err != nil {
@@ -285,7 +303,7 @@ func (r *Route) addRoutes(domain domain.Domain, prefixes []netip.Prefix) ([]neti
 	var merr *multierror.Error
 
 	for _, prefix := range prefixes {
-		if _, err := r.routeRefCounter.Increment(prefix, nil); err != nil {
+		if _, err := r.routeRefCounter.Increment(prefix, struct{}{}); err != nil {
 			merr = multierror.Append(merr, fmt.Errorf("add dynamic route for IP %s: %w", prefix, err))
 			continue
 		}

@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"fmt"
 	"testing"
 
@@ -13,27 +14,17 @@ type benchCase struct {
 	size    int
 }
 
-var newFs = func(b *testing.B) Store {
-	b.Helper()
-	store, _ := NewFileStore(b.TempDir(), nil)
-	return store
-}
-
 var newSqlite = func(b *testing.B) Store {
 	b.Helper()
-	store, _ := NewSqliteStore(b.TempDir(), nil)
+	store, _ := NewSqliteStore(context.Background(), b.TempDir(), nil)
 	return store
 }
 
 func BenchmarkTest_StoreWrite(b *testing.B) {
 	cases := []benchCase{
-		{name: "FileStore_Write", storeFn: newFs, size: 100},
 		{name: "SqliteStore_Write", storeFn: newSqlite, size: 100},
-		{name: "FileStore_Write", storeFn: newFs, size: 500},
 		{name: "SqliteStore_Write", storeFn: newSqlite, size: 500},
-		{name: "FileStore_Write", storeFn: newFs, size: 1000},
 		{name: "SqliteStore_Write", storeFn: newSqlite, size: 1000},
-		{name: "FileStore_Write", storeFn: newFs, size: 2000},
 		{name: "SqliteStore_Write", storeFn: newSqlite, size: 2000},
 	}
 
@@ -60,11 +51,8 @@ func BenchmarkTest_StoreWrite(b *testing.B) {
 
 func BenchmarkTest_StoreRead(b *testing.B) {
 	cases := []benchCase{
-		{name: "FileStore_Read", storeFn: newFs, size: 100},
 		{name: "SqliteStore_Read", storeFn: newSqlite, size: 100},
-		{name: "FileStore_Read", storeFn: newFs, size: 500},
 		{name: "SqliteStore_Read", storeFn: newSqlite, size: 500},
-		{name: "FileStore_Read", storeFn: newFs, size: 1000},
 		{name: "SqliteStore_Read", storeFn: newSqlite, size: 1000},
 	}
 
@@ -76,15 +64,23 @@ func BenchmarkTest_StoreRead(b *testing.B) {
 			_ = newAccount(store, i)
 		}
 
-		accounts := store.GetAllAccounts()
+		accounts := store.GetAllAccounts(context.Background())
 		id := accounts[c.size-1].Id
 
 		b.Run(name, func(b *testing.B) {
 			b.RunParallel(func(pb *testing.PB) {
 				for pb.Next() {
-					_, _ = store.GetAccount(id)
+					_, _ = store.GetAccount(context.Background(), id)
 				}
 			})
 		})
 	}
+}
+
+func newStore(t *testing.T) Store {
+	t.Helper()
+
+	store := newSqliteStore(t)
+
+	return store
 }

@@ -2,18 +2,23 @@ package cmd
 
 import (
 	"context"
+	"sync"
+
 	"github.com/kardianos/service"
 	log "github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
 	"google.golang.org/grpc"
 
 	"github.com/netbirdio/netbird/client/internal"
+	"github.com/netbirdio/netbird/client/server"
 )
 
 type program struct {
-	ctx    context.Context
-	cancel context.CancelFunc
-	serv   *grpc.Server
+	ctx              context.Context
+	cancel           context.CancelFunc
+	serv             *grpc.Server
+	serverInstance   *server.Server
+	serverInstanceMu sync.Mutex
 }
 
 func newProgram(ctx context.Context, cancel context.CancelFunc) *program {

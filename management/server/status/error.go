@@ -95,3 +95,62 @@ func NewUserNotFoundError(userKey string) error {
 func NewPeerNotRegisteredError() error {
 	return Errorf(Unauthenticated, "peer is not registered")
 }
+
+// NewPeerLoginExpiredError creates a new Error with PermissionDenied type for an expired peer
+func NewPeerLoginExpiredError() error {
+	return Errorf(PermissionDenied, "peer login has expired, please log in once more")
+}
+
+// NewSetupKeyNotFoundError creates a new Error with NotFound type for a missing setup key
+func NewSetupKeyNotFoundError(setupKeyID string) error {
+	return Errorf(NotFound, "setup key: %s not found", setupKeyID)
+}
+
+func NewGetAccountFromStoreError(err error) error {
+	return Errorf(Internal, "issue getting account from store: %s", err)
+}
+
+// NewUserNotPartOfAccountError creates a new Error with PermissionDenied type for a user not being part of an account
+func NewUserNotPartOfAccountError() error {
+	return Errorf(PermissionDenied, "user is not part of this account")
+}
+
+// NewGetUserFromStoreError creates a new Error with Internal type for an issue getting user from store
+func NewGetUserFromStoreError() error {
+	return Errorf(Internal, "issue getting user from store")
+}
+
+// NewAdminPermissionError creates a new Error with PermissionDenied type for actions requiring admin role.
+func NewAdminPermissionError() error {
+	return Errorf(PermissionDenied, "admin role required to perform this action")
+}
+
+// NewInvalidKeyIDError creates a new Error with InvalidArgument type for an issue getting a setup key
+func NewInvalidKeyIDError() error {
+	return Errorf(InvalidArgument, "invalid key ID")
+}
+
+// NewGetAccountError creates a new Error with Internal type for an issue getting account
+func NewGetAccountError(err error) error {
+	return Errorf(Internal, "error getting account: %s", err)
+}
+
+// NewGroupNotFoundError creates a new Error with NotFound type for a missing group
+func NewGroupNotFoundError(groupID string) error {
+	return Errorf(NotFound, "group: %s not found", groupID)
+}
+
+// NewPostureChecksNotFoundError creates a new Error with NotFound type for a missing posture checks
+func NewPostureChecksNotFoundError(postureChecksID string) error {
+	return Errorf(NotFound, "posture checks: %s not found", postureChecksID)
+}
+
+// NewPolicyNotFoundError creates a new Error with NotFound type for a missing policy
+func NewPolicyNotFoundError(policyID string) error {
+	return Errorf(NotFound, "policy: %s not found", policyID)
+}
+
+// NewNameServerGroupNotFoundError creates a new Error with NotFound type for a missing name server group
+func NewNameServerGroupNotFoundError(nsGroupID string) error {
+	return Errorf(NotFound, "nameserver group: %s not found", nsGroupID)
+}

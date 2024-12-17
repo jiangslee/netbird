@@ -4,6 +4,7 @@ package networkmonitor
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"syscall"
 	"unsafe"
@@ -21,8 +22,17 @@ func checkChange(ctx context.Context, nexthopv4, nexthopv6 systemops.Nexthop, ca
 		return fmt.Errorf("failed to open routing socket: %v", err)
 	}
 	defer func() {
-		if err := unix.Close(fd); err != nil {
-			log.Errorf("Network monitor: failed to close routing socket: %v", err)
+		err := unix.Close(fd)
+		if err != nil && !errors.Is(err, unix.EBADF) {
+			log.Warnf("Network monitor: failed to close routing socket: %v", err)
+		}
+	}()
+
+	go func() {
+		<-ctx.Done()
+		err := unix.Close(fd)
+		if err != nil && !errors.Is(err, unix.EBADF) {
+			log.Debugf("Network monitor: closed routing socket: %v", err)
 		}
 	}()
 
@@ -34,44 +44,28 @@ func checkChange(ctx context.Context, nexthopv4, nexthopv6 systemops.Nexthop, ca
 			buf := make([]byte, 2048)
 			n, err := unix.Read(fd, buf)
 			if err != nil {
-				log.Errorf("Network monitor: failed to read from routing socket: %v", err)
+				if !errors.Is(err, unix.EBADF) && !errors.Is(err, unix.EINVAL) {
+					log.Warnf("Network monitor: failed to read from routing socket: %v", err)
+				}
 				continue
 			}
 			if n < unix.SizeofRtMsghdr {
-				log.Errorf("Network monitor: read from routing socket returned less than expected: %d bytes", n)
+				log.Debugf("Network monitor: read from routing socket returned less than expected: %d bytes", n)
 				continue
 			}
 
 			msg := (*unix.RtMsghdr)(unsafe.Pointer(&buf[0]))
 
 			switch msg.Type {
-
-			// handle interface state changes
-			case unix.RTM_IFINFO:
-				ifinfo, err := parseInterfaceMessage(buf[:n])
-				if err != nil {
-					log.Errorf("Network monitor: error parsing interface message: %v", err)
-					continue
-				}
-				if msg.Flags&unix.IFF_UP != 0 {
-					continue
-				}
-				if (nexthopv4.Intf == nil || ifinfo.Index != nexthopv4.Intf.Index) && (nexthopv6.Intf == nil || ifinfo.Index != nexthopv6.Intf.Index) {
-					continue
-				}
-
-				log.Infof("Network monitor: monitored interface (%s) is down.", ifinfo.Name)
-				go callback()
-
 			// handle route changes
 			case unix.RTM_ADD, syscall.RTM_DELETE:
 				route, err := parseRouteMessage(buf[:n])
 				if err != nil {
-					log.Errorf("Network monitor: error parsing routing message: %v", err)
+					log.Debugf("Network monitor: error parsing routing message: %v", err)
 					continue
 				}
 
-				if !route.Dst.Addr().IsUnspecified() {
+				if route.Dst.Bits() != 0 {
 					continue
 				}
 
@@ -92,24 +86,6 @@ func checkChange(ctx context.Context, nexthopv4, nexthopv6 systemops.Nexthop, ca
 			}
 		}
 	}
-}
-
-func parseInterfaceMessage(buf []byte) (*route.InterfaceMessage, error) {
-	msgs, err := route.ParseRIB(route.RIBTypeInterface, buf)
-	if err != nil {
-		return nil, fmt.Errorf("parse RIB: %v", err)
-	}
-
-	if len(msgs) != 1 {
-		return nil, fmt.Errorf("unexpected RIB message msgs: %v", msgs)
-	}
-
-	msg, ok := msgs[0].(*route.InterfaceMessage)
-	if !ok {
-		return nil, fmt.Errorf("unexpected RIB message type: %T", msgs[0])
-	}
-
-	return msg, nil
 }
 
 func parseRouteMessage(buf []byte) (*systemops.Route, error) {

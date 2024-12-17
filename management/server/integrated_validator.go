@@ -1,9 +1,10 @@
 package server
 
 import (
+	"context"
 	"errors"
 
-	"github.com/google/martian/v3/log"
+	log "github.com/sirupsen/logrus"
 
 	"github.com/netbirdio/netbird/management/server/account"
 )
@@ -19,22 +20,22 @@ import (
 //
 // Returns:
 //   - error: An error if any occurred during the process, otherwise returns nil
-func (am *DefaultAccountManager) UpdateIntegratedValidatorGroups(accountID string, userID string, groups []string) error {
-	ok, err := am.GroupValidation(accountID, groups)
+func (am *DefaultAccountManager) UpdateIntegratedValidatorGroups(ctx context.Context, accountID string, userID string, groups []string) error {
+	ok, err := am.GroupValidation(ctx, accountID, groups)
 	if err != nil {
-		log.Debugf("error validating groups: %s", err.Error())
+		log.WithContext(ctx).Debugf("error validating groups: %s", err.Error())
 		return err
 	}
 
 	if !ok {
-		log.Debugf("invalid groups")
+		log.WithContext(ctx).Debugf("invalid groups")
 		return errors.New("invalid groups")
 	}
 
-	unlock := am.Store.AcquireAccountWriteLock(accountID)
+	unlock := am.Store.AcquireWriteLockByUID(ctx, accountID)
 	defer unlock()
 
-	a, err := am.Store.GetAccountByUser(userID)
+	a, err := am.Store.GetAccountByUser(ctx, userID)
 	if err != nil {
 		return err
 	}
@@ -48,28 +49,25 @@ func (am *DefaultAccountManager) UpdateIntegratedValidatorGroups(accountID strin
 		a.Settings.Extra = extra
 	}
 	extra.IntegratedValidatorGroups = groups
-	return am.Store.SaveAccount(a)
+	return am.Store.SaveAccount(ctx, a)
 }
 
-func (am *DefaultAccountManager) GroupValidation(accountId string, groups []string) (bool, error) {
-	if len(groups) == 0 {
+func (am *DefaultAccountManager) GroupValidation(ctx context.Context, accountID string, groupIDs []string) (bool, error) {
+	if len(groupIDs) == 0 {
 		return true, nil
 	}
-	accountsGroups, err := am.ListGroups(accountId)
-	if err != nil {
-		return false, err
-	}
-	for _, group := range groups {
-		var found bool
-		for _, accountGroup := range accountsGroups {
-			if accountGroup.ID == group {
-				found = true
-				break
+
+	err := am.Store.ExecuteInTransaction(ctx, func(transaction Store) error {
+		for _, groupID := range groupIDs {
+			_, err := transaction.GetGroupByID(context.Background(), LockingStrengthShare, accountID, groupID)
+			if err != nil {
+				return err
 			}
 		}
-		if !found {
-			return false, nil
-		}
+		return nil
+	})
+	if err != nil {
+		return false, err
 	}
 
 	return true, nil

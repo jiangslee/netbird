@@ -2,25 +2,35 @@ package peer
 
 import (
 	"context"
+	"os"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/magiconair/properties/assert"
-	"github.com/pion/stun/v2"
 
+	"github.com/netbirdio/netbird/client/iface"
+	"github.com/netbirdio/netbird/client/internal/peer/guard"
+	"github.com/netbirdio/netbird/client/internal/peer/ice"
 	"github.com/netbirdio/netbird/client/internal/stdnet"
-	"github.com/netbirdio/netbird/client/internal/wgproxy"
-	"github.com/netbirdio/netbird/iface"
+	"github.com/netbirdio/netbird/util"
+	semaphoregroup "github.com/netbirdio/netbird/util/semaphore-group"
 )
 
 var connConf = ConnConfig{
-	Key:                "LLHf3Ma6z6mdLbriAJbqhX7+nM/B71lgw2+91q3LfhU=",
-	LocalKey:           "RRHf3Ma6z6mdLbriAJbqhX7+nM/B71lgw2+91q3LfhU=",
-	StunTurn:           []*stun.URI{},
-	InterfaceBlackList: nil,
-	Timeout:            time.Second,
-	LocalWgPort:        51820,
+	Key:         "LLHf3Ma6z6mdLbriAJbqhX7+nM/B71lgw2+91q3LfhU=",
+	LocalKey:    "RRHf3Ma6z6mdLbriAJbqhX7+nM/B71lgw2+91q3LfhU=",
+	Timeout:     time.Second,
+	LocalWgPort: 51820,
+	ICEConfig: ice.Config{
+		InterfaceBlackList: nil,
+	},
+}
+
+func TestMain(m *testing.M) {
+	_ = util.InitLog("trace", "console")
+	code := m.Run()
+	os.Exit(code)
 }
 
 func TestNewConn_interfaceFilter(t *testing.T) {
@@ -36,11 +46,8 @@ func TestNewConn_interfaceFilter(t *testing.T) {
 }
 
 func TestConn_GetKey(t *testing.T) {
-	wgProxyFactory := wgproxy.NewFactory(context.Background(), false, connConf.LocalWgPort)
-	defer func() {
-		_ = wgProxyFactory.Free()
-	}()
-	conn, err := NewConn(connConf, nil, wgProxyFactory, nil, nil)
+	swWatcher := guard.NewSRWatcher(nil, nil, nil, connConf.ICEConfig)
+	conn, err := NewConn(context.Background(), connConf, nil, nil, nil, nil, swWatcher, semaphoregroup.NewSemaphoreGroup(1))
 	if err != nil {
 		return
 	}
@@ -51,11 +58,8 @@ func TestConn_GetKey(t *testing.T) {
 }
 
 func TestConn_OnRemoteOffer(t *testing.T) {
-	wgProxyFactory := wgproxy.NewFactory(context.Background(), false, connConf.LocalWgPort)
-	defer func() {
-		_ = wgProxyFactory.Free()
-	}()
-	conn, err := NewConn(connConf, NewRecorder("https://mgm"), wgProxyFactory, nil, nil)
+	swWatcher := guard.NewSRWatcher(nil, nil, nil, connConf.ICEConfig)
+	conn, err := NewConn(context.Background(), connConf, NewRecorder("https://mgm"), nil, nil, nil, swWatcher, semaphoregroup.NewSemaphoreGroup(1))
 	if err != nil {
 		return
 	}
@@ -63,7 +67,7 @@ func TestConn_OnRemoteOffer(t *testing.T) {
 	wg := sync.WaitGroup{}
 	wg.Add(2)
 	go func() {
-		<-conn.remoteOffersCh
+		<-conn.handshaker.remoteOffersCh
 		wg.Done()
 	}()
 
@@ -88,11 +92,8 @@ func TestConn_OnRemoteOffer(t *testing.T) {
 }
 
 func TestConn_OnRemoteAnswer(t *testing.T) {
-	wgProxyFactory := wgproxy.NewFactory(context.Background(), false, connConf.LocalWgPort)
-	defer func() {
-		_ = wgProxyFactory.Free()
-	}()
-	conn, err := NewConn(connConf, NewRecorder("https://mgm"), wgProxyFactory, nil, nil)
+	swWatcher := guard.NewSRWatcher(nil, nil, nil, connConf.ICEConfig)
+	conn, err := NewConn(context.Background(), connConf, NewRecorder("https://mgm"), nil, nil, nil, swWatcher, semaphoregroup.NewSemaphoreGroup(1))
 	if err != nil {
 		return
 	}
@@ -100,7 +101,7 @@ func TestConn_OnRemoteAnswer(t *testing.T) {
 	wg := sync.WaitGroup{}
 	wg.Add(2)
 	go func() {
-		<-conn.remoteAnswerCh
+		<-conn.handshaker.remoteAnswerCh
 		wg.Done()
 	}()
 
@@ -124,62 +125,39 @@ func TestConn_OnRemoteAnswer(t *testing.T) {
 	wg.Wait()
 }
 func TestConn_Status(t *testing.T) {
-	wgProxyFactory := wgproxy.NewFactory(context.Background(), false, connConf.LocalWgPort)
-	defer func() {
-		_ = wgProxyFactory.Free()
-	}()
-	conn, err := NewConn(connConf, NewRecorder("https://mgm"), wgProxyFactory, nil, nil)
+	swWatcher := guard.NewSRWatcher(nil, nil, nil, connConf.ICEConfig)
+	conn, err := NewConn(context.Background(), connConf, NewRecorder("https://mgm"), nil, nil, nil, swWatcher, semaphoregroup.NewSemaphoreGroup(1))
 	if err != nil {
 		return
 	}
 
 	tables := []struct {
-		name   string
-		status ConnStatus
-		want   ConnStatus
+		name        string
+		statusIce   ConnStatus
+		statusRelay ConnStatus
+		want        ConnStatus
 	}{
-		{"StatusConnected", StatusConnected, StatusConnected},
-		{"StatusDisconnected", StatusDisconnected, StatusDisconnected},
-		{"StatusConnecting", StatusConnecting, StatusConnecting},
+		{"StatusConnected", StatusConnected, StatusConnected, StatusConnected},
+		{"StatusDisconnected", StatusDisconnected, StatusDisconnected, StatusDisconnected},
+		{"StatusConnecting", StatusConnecting, StatusConnecting, StatusConnecting},
+		{"StatusConnectingIce", StatusConnecting, StatusDisconnected, StatusConnecting},
+		{"StatusConnectingIceAlternative", StatusConnecting, StatusConnected, StatusConnected},
+		{"StatusConnectingRelay", StatusDisconnected, StatusConnecting, StatusConnecting},
+		{"StatusConnectingRelayAlternative", StatusConnected, StatusConnecting, StatusConnected},
 	}
 
 	for _, table := range tables {
 		t.Run(table.name, func(t *testing.T) {
-			conn.status = table.status
+			si := NewAtomicConnStatus()
+			si.Set(table.statusIce)
+			conn.statusICE = si
+
+			sr := NewAtomicConnStatus()
+			sr.Set(table.statusRelay)
+			conn.statusRelay = sr
 
 			got := conn.Status()
 			assert.Equal(t, got, table.want, "they should be equal")
 		})
 	}
-}
-
-func TestConn_Close(t *testing.T) {
-	wgProxyFactory := wgproxy.NewFactory(context.Background(), false, connConf.LocalWgPort)
-	defer func() {
-		_ = wgProxyFactory.Free()
-	}()
-	conn, err := NewConn(connConf, NewRecorder("https://mgm"), wgProxyFactory, nil, nil)
-	if err != nil {
-		return
-	}
-
-	wg := sync.WaitGroup{}
-	wg.Add(1)
-	go func() {
-		<-conn.closeCh
-		wg.Done()
-	}()
-
-	go func() {
-		for {
-			err := conn.Close()
-			if err != nil {
-				continue
-			} else {
-				return
-			}
-		}
-	}()
-
-	wg.Wait()
 }

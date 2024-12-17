@@ -1,6 +1,7 @@
 package idp
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"strings"
@@ -65,7 +66,6 @@ func TestNewZitadelManager(t *testing.T) {
 }
 
 func TestZitadelRequestJWTToken(t *testing.T) {
-
 	type requestJWTTokenTest struct {
 		name                    string
 		inputCode               int
@@ -87,15 +87,14 @@ func TestZitadelRequestJWTToken(t *testing.T) {
 	requestJWTTokenTestCase2 := requestJWTTokenTest{
 		name:                    "Request Bad Status Code",
 		inputCode:               400,
-		inputRespBody:           "{}",
+		inputRespBody:           "{\"error\": \"invalid_scope\", \"error_description\":\"openid missing\"}",
 		helper:                  JsonParser{},
-		expectedFuncExitErrDiff: fmt.Errorf("unable to get zitadel token, statusCode 400"),
+		expectedFuncExitErrDiff: fmt.Errorf("unable to get zitadel token, statusCode 400, zitadel: error: invalid_scope error_description: openid missing"),
 		expectedToken:           "",
 	}
 
 	for _, testCase := range []requestJWTTokenTest{requestJWTTokenTesttCase1, requestJWTTokenTestCase2} {
 		t.Run(testCase.name, func(t *testing.T) {
-
 			jwtReqClient := mockHTTPClient{
 				resBody: testCase.inputRespBody,
 				code:    testCase.inputCode,
@@ -108,7 +107,7 @@ func TestZitadelRequestJWTToken(t *testing.T) {
 				helper:       testCase.helper,
 			}
 
-			resp, err := creds.requestJWTToken()
+			resp, err := creds.requestJWTToken(context.Background())
 			if err != nil {
 				if testCase.expectedFuncExitErrDiff != nil {
 					assert.EqualError(t, err, testCase.expectedFuncExitErrDiff.Error(), "errors should be the same")
@@ -155,7 +154,7 @@ func TestZitadelParseRequestJWTResponse(t *testing.T) {
 	}
 	parseRequestJWTResponseTestCase2 := parseRequestJWTResponseTest{
 		name:                 "Parse Bad json JWT Body",
-		inputRespBody:        "",
+		inputRespBody:        "{}",
 		helper:               JsonParser{},
 		expectedToken:        "",
 		expectedExpiresIn:    0,
@@ -253,7 +252,7 @@ func TestZitadelAuthenticate(t *testing.T) {
 		inputCode:               400,
 		inputResBody:            "{}",
 		helper:                  JsonParser{},
-		expectedFuncExitErrDiff: fmt.Errorf("unable to get zitadel token, statusCode 400"),
+		expectedFuncExitErrDiff: fmt.Errorf("unable to get zitadel token, statusCode 400, zitadel: unknown error"),
 		expectedCode:            200,
 		expectedToken:           "",
 	}
@@ -274,7 +273,7 @@ func TestZitadelAuthenticate(t *testing.T) {
 			}
 			creds.jwtToken.expiresInTime = testCase.inputExpireToken
 
-			_, err := creds.Authenticate()
+			_, err := creds.Authenticate(context.Background())
 			if err != nil {
 				if testCase.expectedFuncExitErrDiff != nil {
 					assert.EqualError(t, err, testCase.expectedFuncExitErrDiff.Error(), "errors should be the same")

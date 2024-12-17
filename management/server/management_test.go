@@ -5,7 +5,6 @@ import (
 	"math/rand"
 	"net"
 	"os"
-	"path/filepath"
 	"runtime"
 	sync2 "sync"
 	"time"
@@ -26,6 +25,7 @@ import (
 	"github.com/netbirdio/netbird/management/server/activity"
 	"github.com/netbirdio/netbird/management/server/group"
 	nbpeer "github.com/netbirdio/netbird/management/server/peer"
+	"github.com/netbirdio/netbird/management/server/telemetry"
 	"github.com/netbirdio/netbird/util"
 )
 
@@ -51,8 +51,6 @@ var _ = Describe("Management service", func() {
 		dataDir, err = os.MkdirTemp("", "wiretrustee_mgmt_test_tmp_*")
 		Expect(err).NotTo(HaveOccurred())
 
-		err = util.CopyFileContents("testdata/store.json", filepath.Join(dataDir, "store.json"))
-		Expect(err).NotTo(HaveOccurred())
 		var listener net.Listener
 
 		config := &server.Config{}
@@ -60,7 +58,7 @@ var _ = Describe("Management service", func() {
 		Expect(err).NotTo(HaveOccurred())
 		config.Datadir = dataDir
 
-		s, listener = startServer(config)
+		s, listener = startServer(config, dataDir, "testdata/store.sql")
 		addr = listener.Addr().String()
 		client, conn = createRawClient(addr)
 
@@ -451,12 +449,12 @@ var _ = Describe("Management service", func() {
 type MocIntegratedValidator struct {
 }
 
-func (a MocIntegratedValidator) ValidateExtraSettings(newExtraSettings *account.ExtraSettings, oldExtraSettings *account.ExtraSettings, peers map[string]*nbpeer.Peer, userID string, accountID string) error {
+func (a MocIntegratedValidator) ValidateExtraSettings(_ context.Context, newExtraSettings *account.ExtraSettings, oldExtraSettings *account.ExtraSettings, peers map[string]*nbpeer.Peer, userID string, accountID string) error {
 	return nil
 }
 
-func (a MocIntegratedValidator) ValidatePeer(update *nbpeer.Peer, peer *nbpeer.Peer, userID string, accountID string, dnsDomain string, peersGroup []string, extraSettings *account.ExtraSettings) (*nbpeer.Peer, error) {
-	return update, nil
+func (a MocIntegratedValidator) ValidatePeer(_ context.Context, update *nbpeer.Peer, peer *nbpeer.Peer, userID string, accountID string, dnsDomain string, peersGroup []string, extraSettings *account.ExtraSettings) (*nbpeer.Peer, bool, error) {
+	return update, false, nil
 }
 
 func (a MocIntegratedValidator) GetValidatedPeers(accountID string, groups map[string]*group.Group, peers map[string]*nbpeer.Peer, extraSettings *account.ExtraSettings) (map[string]struct{}, error) {
@@ -467,15 +465,15 @@ func (a MocIntegratedValidator) GetValidatedPeers(accountID string, groups map[s
 	return validatedPeers, nil
 }
 
-func (MocIntegratedValidator) PreparePeer(accountID string, peer *nbpeer.Peer, peersGroup []string, extraSettings *account.ExtraSettings) *nbpeer.Peer {
+func (MocIntegratedValidator) PreparePeer(_ context.Context, accountID string, peer *nbpeer.Peer, peersGroup []string, extraSettings *account.ExtraSettings) *nbpeer.Peer {
 	return peer
 }
 
-func (MocIntegratedValidator) IsNotValidPeer(accountID string, peer *nbpeer.Peer, peersGroup []string, extraSettings *account.ExtraSettings) (bool, bool, error) {
+func (MocIntegratedValidator) IsNotValidPeer(_ context.Context, accountID string, peer *nbpeer.Peer, peersGroup []string, extraSettings *account.ExtraSettings) (bool, bool, error) {
 	return false, false, nil
 }
 
-func (MocIntegratedValidator) PeerDeleted(_, _ string) error {
+func (MocIntegratedValidator) PeerDeleted(_ context.Context, _, _ string) error {
 	return nil
 }
 
@@ -483,7 +481,7 @@ func (MocIntegratedValidator) SetPeerInvalidationListener(func(accountID string)
 
 }
 
-func (MocIntegratedValidator) Stop() {}
+func (MocIntegratedValidator) Stop(_ context.Context) {}
 
 func loginPeerWithValidSetupKey(serverPubKey wgtypes.Key, key wgtypes.Key, client mgmtProto.ManagementServiceClient) *mgmtProto.LoginResponse {
 	defer GinkgoRecover()
@@ -529,25 +527,31 @@ func createRawClient(addr string) (mgmtProto.ManagementServiceClient, *grpc.Clie
 	return mgmtProto.NewManagementServiceClient(conn), conn
 }
 
-func startServer(config *server.Config) (*grpc.Server, net.Listener) {
+func startServer(config *server.Config, dataDir string, testFile string) (*grpc.Server, net.Listener) {
 	lis, err := net.Listen("tcp", ":0")
 	Expect(err).NotTo(HaveOccurred())
 	s := grpc.NewServer()
 
-	store, _, err := server.NewTestStoreFromJson(config.Datadir)
+	store, _, err := server.NewTestStoreFromSQL(context.Background(), testFile, dataDir)
 	if err != nil {
 		log.Fatalf("failed creating a store: %s: %v", config.Datadir, err)
 	}
 
 	peersUpdateManager := server.NewPeersUpdateManager(nil)
 	eventStore := &activity.InMemoryEventStore{}
-	accountManager, err := server.BuildManager(store, peersUpdateManager, nil, "", "netbird.selfhosted",
-		eventStore, nil, false, MocIntegratedValidator{})
+
+	metrics, err := telemetry.NewDefaultAppMetrics(context.Background())
+	if err != nil {
+		log.Fatalf("failed creating metrics: %v", err)
+	}
+
+	accountManager, err := server.BuildManager(context.Background(), store, peersUpdateManager, nil, "", "netbird.selfhosted", eventStore, nil, false, MocIntegratedValidator{}, metrics)
 	if err != nil {
 		log.Fatalf("failed creating a manager: %v", err)
 	}
-	turnManager := server.NewTimeBasedAuthSecretsManager(peersUpdateManager, config.TURNConfig)
-	mgmtServer, err := server.NewServer(config, accountManager, peersUpdateManager, turnManager, nil, nil)
+
+	secretsManager := server.NewTimeBasedAuthSecretsManager(peersUpdateManager, config.TURNConfig, config.Relay)
+	mgmtServer, err := server.NewServer(context.Background(), config, accountManager, peersUpdateManager, secretsManager, nil, nil)
 	Expect(err).NotTo(HaveOccurred())
 	mgmtProto.RegisterManagementServiceServer(s, mgmtServer)
 	go func() {

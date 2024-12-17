@@ -15,7 +15,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 	"unicode"
 
@@ -23,8 +22,8 @@ import (
 	"fyne.io/fyne/v2/app"
 	"fyne.io/fyne/v2/dialog"
 	"fyne.io/fyne/v2/widget"
+	"fyne.io/systray"
 	"github.com/cenkalti/backoff/v4"
-	"github.com/getlantern/systray"
 	log "github.com/sirupsen/logrus"
 	"github.com/skratchdot/open-golang/open"
 	"golang.zx2c4.com/wireguard/wgctrl/wgtypes"
@@ -34,6 +33,7 @@ import (
 	"github.com/netbirdio/netbird/client/internal"
 	"github.com/netbirdio/netbird/client/proto"
 	"github.com/netbirdio/netbird/client/system"
+	"github.com/netbirdio/netbird/util"
 	"github.com/netbirdio/netbird/version"
 )
 
@@ -62,7 +62,24 @@ func main() {
 	var errorMSG string
 	flag.StringVar(&errorMSG, "error-msg", "", "displays a error message window")
 
+	tmpDir := "/tmp"
+	if runtime.GOOS == "windows" {
+		tmpDir = os.TempDir()
+	}
+
+	var saveLogsInFile bool
+	flag.BoolVar(&saveLogsInFile, "use-log-file", false, fmt.Sprintf("save logs in a file: %s/netbird-ui-PID.log", tmpDir))
+
 	flag.Parse()
+
+	if saveLogsInFile {
+		logFile := path.Join(tmpDir, fmt.Sprintf("netbird-ui-%d.log", os.Getpid()))
+		err := util.InitLog("trace", logFile)
+		if err != nil {
+			log.Errorf("error while initializing log: %v", err)
+			return
+		}
+	}
 
 	a := app.NewWithID("NetBird")
 	a.SetIcon(fyne.NewStaticResource("netbird", iconDisconnectedPNG))
@@ -76,10 +93,15 @@ func main() {
 	if showSettings || showRoutes {
 		a.Run()
 	} else {
-		if err := checkPIDFile(); err != nil {
-			log.Errorf("check PID file: %v", err)
+		running, err := isAnotherProcessRunning()
+		if err != nil {
+			log.Errorf("error while checking process: %v", err)
+		}
+		if running {
+			log.Warn("another process is running")
 			return
 		}
+		client.setDefaultFonts()
 		systray.Run(client.onTrayReady, client.onTrayExit)
 	}
 }
@@ -550,6 +572,7 @@ func (s *serviceClient) onTrayReady() {
 	s.update.SetOnUpdateListener(s.onUpdateAvailable)
 	go func() {
 		s.getSrvConfig()
+		time.Sleep(100 * time.Millisecond) // To prevent race condition caused by systray not being fully initialized and ignoring setIcon
 		for {
 			err := s.updateStatus()
 			if err != nil {
@@ -859,20 +882,4 @@ func openURL(url string) error {
 		err = fmt.Errorf("unsupported platform")
 	}
 	return err
-}
-
-// checkPIDFile exists and return error, or write new.
-func checkPIDFile() error {
-	pidFile := path.Join(os.TempDir(), "wiretrustee-ui.pid")
-	if piddata, err := os.ReadFile(pidFile); err == nil {
-		if pid, err := strconv.Atoi(string(piddata)); err == nil {
-			if process, err := os.FindProcess(pid); err == nil {
-				if err := process.Signal(syscall.Signal(0)); err == nil {
-					return fmt.Errorf("process already exists: %d", pid)
-				}
-			}
-		}
-	}
-
-	return os.WriteFile(pidFile, []byte(fmt.Sprintf("%d", os.Getpid())), 0o664) //nolint:gosec
 }

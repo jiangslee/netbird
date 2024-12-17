@@ -14,13 +14,17 @@ import (
 	log "github.com/sirupsen/logrus"
 
 	firewall "github.com/netbirdio/netbird/client/firewall/manager"
+	"github.com/netbirdio/netbird/client/iface"
+	"github.com/netbirdio/netbird/client/iface/configurer"
 	"github.com/netbirdio/netbird/client/internal/listener"
 	"github.com/netbirdio/netbird/client/internal/peer"
+	"github.com/netbirdio/netbird/client/internal/routemanager/notifier"
 	"github.com/netbirdio/netbird/client/internal/routemanager/refcounter"
 	"github.com/netbirdio/netbird/client/internal/routemanager/systemops"
 	"github.com/netbirdio/netbird/client/internal/routemanager/vars"
 	"github.com/netbirdio/netbird/client/internal/routeselector"
-	"github.com/netbirdio/netbird/iface"
+	"github.com/netbirdio/netbird/client/internal/statemanager"
+	relayClient "github.com/netbirdio/netbird/relay/client"
 	"github.com/netbirdio/netbird/route"
 	nbnet "github.com/netbirdio/netbird/util/net"
 	"github.com/netbirdio/netbird/version"
@@ -35,7 +39,7 @@ type Manager interface {
 	SetRouteChangeListener(listener listener.NetworkChangeListener)
 	InitialRouteRange() []string
 	EnableServerRouter(firewall firewall.Manager) error
-	Stop()
+	Stop(stateManager *statemanager.Manager)
 }
 
 // DefaultManager is the default instance of a route manager
@@ -48,43 +52,49 @@ type DefaultManager struct {
 	serverRouter         serverRouter
 	sysOps               *systemops.SysOps
 	statusRecorder       *peer.Status
-	wgInterface          *iface.WGIface
+	relayMgr             *relayClient.Manager
+	wgInterface          iface.IWGIface
 	pubKey               string
-	notifier             *notifier
+	notifier             *notifier.Notifier
 	routeRefCounter      *refcounter.RouteRefCounter
 	allowedIPsRefCounter *refcounter.AllowedIPsRefCounter
 	dnsRouteInterval     time.Duration
+	stateManager         *statemanager.Manager
 }
 
 func NewManager(
 	ctx context.Context,
 	pubKey string,
 	dnsRouteInterval time.Duration,
-	wgInterface *iface.WGIface,
+	wgInterface iface.IWGIface,
 	statusRecorder *peer.Status,
+	relayMgr *relayClient.Manager,
 	initialRoutes []*route.Route,
+	stateManager *statemanager.Manager,
 ) *DefaultManager {
 	mCTX, cancel := context.WithCancel(ctx)
-	sysOps := systemops.NewSysOps(wgInterface)
+	notifier := notifier.NewNotifier()
+	sysOps := systemops.NewSysOps(wgInterface, notifier)
 
 	dm := &DefaultManager{
 		ctx:              mCTX,
 		stop:             cancel,
 		dnsRouteInterval: dnsRouteInterval,
 		clientNetworks:   make(map[route.HAUniqueID]*clientNetwork),
-		routeSelector:    routeselector.NewRouteSelector(),
+		relayMgr:         relayMgr,
 		sysOps:           sysOps,
 		statusRecorder:   statusRecorder,
 		wgInterface:      wgInterface,
 		pubKey:           pubKey,
-		notifier:         newNotifier(),
+		notifier:         notifier,
+		stateManager:     stateManager,
 	}
 
 	dm.routeRefCounter = refcounter.New(
-		func(prefix netip.Prefix, _ any) (any, error) {
-			return nil, sysOps.AddVPNRoute(prefix, wgInterface.ToInterface())
+		func(prefix netip.Prefix, _ struct{}) (struct{}, error) {
+			return struct{}{}, sysOps.AddVPNRoute(prefix, wgInterface.ToInterface())
 		},
-		func(prefix netip.Prefix, _ any) error {
+		func(prefix netip.Prefix, _ struct{}) error {
 			return sysOps.RemoveVPNRoute(prefix, wgInterface.ToInterface())
 		},
 	)
@@ -96,7 +106,7 @@ func NewManager(
 		},
 		func(prefix netip.Prefix, peerKey string) error {
 			if err := wgInterface.RemoveAllowedIP(peerKey, prefix.String()); err != nil {
-				if !errors.Is(err, iface.ErrPeerNotFound) && !errors.Is(err, iface.ErrAllowedIPNotFound) {
+				if !errors.Is(err, configurer.ErrPeerNotFound) && !errors.Is(err, configurer.ErrAllowedIPNotFound) {
 					return err
 				}
 				log.Tracef("Remove allowed IPs %s for %s: %v", prefix, peerKey, err)
@@ -107,31 +117,58 @@ func NewManager(
 
 	if runtime.GOOS == "android" {
 		cr := dm.clientRoutes(initialRoutes)
-		dm.notifier.setInitialClientRoutes(cr)
+		dm.notifier.SetInitialClientRoutes(cr)
 	}
 	return dm
 }
 
 // Init sets up the routing
 func (m *DefaultManager) Init() (nbnet.AddHookFunc, nbnet.RemoveHookFunc, error) {
+	m.routeSelector = m.initSelector()
+
 	if nbnet.CustomRoutingDisabled() {
 		return nil, nil, nil
 	}
 
-	if err := m.sysOps.CleanupRouting(); err != nil {
+	if err := m.sysOps.CleanupRouting(nil); err != nil {
 		log.Warnf("Failed cleaning up routing: %v", err)
 	}
 
-	mgmtAddress := m.statusRecorder.GetManagementState().URL
-	signalAddress := m.statusRecorder.GetSignalState().URL
-	ips := resolveURLsToIPs([]string{mgmtAddress, signalAddress})
+	initialAddresses := []string{m.statusRecorder.GetManagementState().URL, m.statusRecorder.GetSignalState().URL}
+	if m.relayMgr != nil {
+		initialAddresses = append(initialAddresses, m.relayMgr.ServerURLs()...)
+	}
 
-	beforePeerHook, afterPeerHook, err := m.sysOps.SetupRouting(ips)
+	ips := resolveURLsToIPs(initialAddresses)
+
+	beforePeerHook, afterPeerHook, err := m.sysOps.SetupRouting(ips, m.stateManager)
 	if err != nil {
 		return nil, nil, fmt.Errorf("setup routing: %w", err)
 	}
+
 	log.Info("Routing setup complete")
 	return beforePeerHook, afterPeerHook, nil
+}
+
+func (m *DefaultManager) initSelector() *routeselector.RouteSelector {
+	var state *SelectorState
+	m.stateManager.RegisterState(state)
+
+	// restore selector state if it exists
+	if err := m.stateManager.LoadState(state); err != nil {
+		log.Warnf("failed to load state: %v", err)
+		return routeselector.NewRouteSelector()
+	}
+
+	if state := m.stateManager.GetState(state); state != nil {
+		if selector, ok := state.(*SelectorState); ok {
+			return (*routeselector.RouteSelector)(selector)
+		}
+
+		log.Warnf("failed to convert state with type %T to SelectorState", state)
+	}
+
+	return routeselector.NewRouteSelector()
 }
 
 func (m *DefaultManager) EnableServerRouter(firewall firewall.Manager) error {
@@ -144,7 +181,7 @@ func (m *DefaultManager) EnableServerRouter(firewall firewall.Manager) error {
 }
 
 // Stop stops the manager watchers and clean firewall rules
-func (m *DefaultManager) Stop() {
+func (m *DefaultManager) Stop(stateManager *statemanager.Manager) {
 	m.stop()
 	if m.serverRouter != nil {
 		m.serverRouter.cleanUp()
@@ -162,7 +199,7 @@ func (m *DefaultManager) Stop() {
 	}
 
 	if !nbnet.CustomRoutingDisabled() {
-		if err := m.sysOps.CleanupRouting(); err != nil {
+		if err := m.sysOps.CleanupRouting(stateManager); err != nil {
 			log.Errorf("Error cleaning up routing: %v", err)
 		} else {
 			log.Info("Routing cleanup complete")
@@ -186,7 +223,7 @@ func (m *DefaultManager) UpdateRoutes(updateSerial uint64, newRoutes []*route.Ro
 
 		filteredClientRoutes := m.routeSelector.FilterSelected(newClientRoutesIDMap)
 		m.updateClientNetworks(updateSerial, filteredClientRoutes)
-		m.notifier.onNewRoutes(filteredClientRoutes)
+		m.notifier.OnNewRoutes(filteredClientRoutes)
 
 		if m.serverRouter != nil {
 			err := m.serverRouter.updateRoutes(newServerRoutesMap)
@@ -199,14 +236,14 @@ func (m *DefaultManager) UpdateRoutes(updateSerial uint64, newRoutes []*route.Ro
 	}
 }
 
-// SetRouteChangeListener set RouteListener for route change notifier
+// SetRouteChangeListener set RouteListener for route change Notifier
 func (m *DefaultManager) SetRouteChangeListener(listener listener.NetworkChangeListener) {
-	m.notifier.setListener(listener)
+	m.notifier.SetListener(listener)
 }
 
 // InitialRouteRange return the list of initial routes. It used by mobile systems
 func (m *DefaultManager) InitialRouteRange() []string {
-	return m.notifier.getInitialRouteRanges()
+	return m.notifier.GetInitialRouteRanges()
 }
 
 // GetRouteSelector returns the route selector
@@ -226,7 +263,7 @@ func (m *DefaultManager) TriggerSelection(networks route.HAMap) {
 
 	networks = m.routeSelector.FilterSelected(networks)
 
-	m.notifier.onNewRoutes(networks)
+	m.notifier.OnNewRoutes(networks)
 
 	m.stopObsoleteClients(networks)
 
@@ -240,6 +277,10 @@ func (m *DefaultManager) TriggerSelection(networks route.HAMap) {
 		m.clientNetworks[id] = clientNetworkWatcher
 		go clientNetworkWatcher.peersStateAndUpdateWatcher()
 		clientNetworkWatcher.sendUpdateToClientNetworkWatcher(routesUpdate{routes: routes})
+	}
+
+	if err := m.stateManager.UpdateState((*SelectorState)(m.routeSelector)); err != nil {
+		log.Errorf("failed to update state: %v", err)
 	}
 }
 

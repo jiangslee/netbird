@@ -152,8 +152,20 @@ const (
 
 // AccessiblePeer defines model for AccessiblePeer.
 type AccessiblePeer struct {
+	// CityName Commonly used English name of the city
+	CityName CityName `json:"city_name"`
+
+	// Connected Peer to Management connection status
+	Connected bool `json:"connected"`
+
+	// CountryCode 2-letter ISO 3166-1 alpha-2 code that represents the country
+	CountryCode CountryCode `json:"country_code"`
+
 	// DnsLabel Peer's DNS label is the parsed peer name for domain resolution. It is used to form an FQDN by appending the account's domain to the peer label. e.g. peer-dns-label.netbird.cloud
 	DnsLabel string `json:"dns_label"`
+
+	// GeonameId Unique identifier from the GeoNames database for a specific geographical location.
+	GeonameId int `json:"geoname_id"`
 
 	// Id Peer ID
 	Id string `json:"id"`
@@ -161,8 +173,14 @@ type AccessiblePeer struct {
 	// Ip Peer's IP address
 	Ip string `json:"ip"`
 
+	// LastSeen Last time peer connected to Netbird's management service
+	LastSeen time.Time `json:"last_seen"`
+
 	// Name Peer's hostname
 	Name string `json:"name"`
+
+	// Os Peer's operating system and version
+	Os string `json:"os"`
 
 	// UserId User ID of the user that enrolled this peer
 	UserId string `json:"user_id"`
@@ -201,6 +219,12 @@ type AccountSettings struct {
 
 	// JwtGroupsEnabled Allows extract groups from JWT claim and add it to account groups.
 	JwtGroupsEnabled *bool `json:"jwt_groups_enabled,omitempty"`
+
+	// PeerInactivityExpiration Period of time of inactivity after which peer session expires (seconds).
+	PeerInactivityExpiration int `json:"peer_inactivity_expiration"`
+
+	// PeerInactivityExpirationEnabled Enables or disables peer inactivity expiration globally. After peer's session has expired the user has to log in (authenticate). Applies only to peers that were added by a user (interactive SSO login).
+	PeerInactivityExpirationEnabled bool `json:"peer_inactivity_expiration_enabled"`
 
 	// PeerLoginExpiration Period of time after which peer login expires (seconds).
 	PeerLoginExpiration int `json:"peer_login_expiration"`
@@ -253,6 +277,27 @@ type Country struct {
 
 // CountryCode 2-letter ISO 3166-1 alpha-2 code that represents the country
 type CountryCode = string
+
+// CreateSetupKeyRequest defines model for CreateSetupKeyRequest.
+type CreateSetupKeyRequest struct {
+	// AutoGroups List of group IDs to auto-assign to peers registered with this key
+	AutoGroups []string `json:"auto_groups"`
+
+	// Ephemeral Indicate that the peer will be ephemeral or not
+	Ephemeral *bool `json:"ephemeral,omitempty"`
+
+	// ExpiresIn Expiration time in seconds
+	ExpiresIn int `json:"expires_in"`
+
+	// Name Setup Key name
+	Name string `json:"name"`
+
+	// Type Setup key type, one-off for single time usage and reusable
+	Type string `json:"type"`
+
+	// UsageLimit A number of times this key can be used. The value of 0 indicates the unlimited usage.
+	UsageLimit int `json:"usage_limit"`
+}
 
 // DNSSettings defines model for DNSSettings.
 type DNSSettings struct {
@@ -469,9 +514,6 @@ type OSVersionCheck struct {
 
 // Peer defines model for Peer.
 type Peer struct {
-	// AccessiblePeers List of accessible peers
-	AccessiblePeers []AccessiblePeer `json:"accessible_peers"`
-
 	// ApprovalRequired (Cloud only) Indicates whether peer needs approval
 	ApprovalRequired bool `json:"approval_required"`
 
@@ -502,77 +544,8 @@ type Peer struct {
 	// Id Peer ID
 	Id string `json:"id"`
 
-	// Ip Peer's IP address
-	Ip string `json:"ip"`
-
-	// KernelVersion Peer's operating system kernel version
-	KernelVersion string `json:"kernel_version"`
-
-	// LastLogin Last time this peer performed log in (authentication). E.g., user authenticated.
-	LastLogin time.Time `json:"last_login"`
-
-	// LastSeen Last time peer connected to Netbird's management service
-	LastSeen time.Time `json:"last_seen"`
-
-	// LoginExpirationEnabled Indicates whether peer login expiration has been enabled or not
-	LoginExpirationEnabled bool `json:"login_expiration_enabled"`
-
-	// LoginExpired Indicates whether peer's login expired or not
-	LoginExpired bool `json:"login_expired"`
-
-	// Name Peer's hostname
-	Name string `json:"name"`
-
-	// Os Peer's operating system and version
-	Os string `json:"os"`
-
-	// SerialNumber System serial number
-	SerialNumber string `json:"serial_number"`
-
-	// SshEnabled Indicates whether SSH server is enabled on this peer
-	SshEnabled bool `json:"ssh_enabled"`
-
-	// UiVersion Peer's desktop UI version
-	UiVersion string `json:"ui_version"`
-
-	// UserId User ID of the user that enrolled this peer
-	UserId string `json:"user_id"`
-
-	// Version Peer's daemon or cli version
-	Version string `json:"version"`
-}
-
-// PeerBase defines model for PeerBase.
-type PeerBase struct {
-	// ApprovalRequired (Cloud only) Indicates whether peer needs approval
-	ApprovalRequired bool `json:"approval_required"`
-
-	// CityName Commonly used English name of the city
-	CityName CityName `json:"city_name"`
-
-	// Connected Peer to Management connection status
-	Connected bool `json:"connected"`
-
-	// ConnectionIp Peer's public connection IP address
-	ConnectionIp string `json:"connection_ip"`
-
-	// CountryCode 2-letter ISO 3166-1 alpha-2 code that represents the country
-	CountryCode CountryCode `json:"country_code"`
-
-	// DnsLabel Peer's DNS label is the parsed peer name for domain resolution. It is used to form an FQDN by appending the account's domain to the peer label. e.g. peer-dns-label.netbird.cloud
-	DnsLabel string `json:"dns_label"`
-
-	// GeonameId Unique identifier from the GeoNames database for a specific geographical location.
-	GeonameId int `json:"geoname_id"`
-
-	// Groups Groups that the peer belongs to
-	Groups []GroupMinimum `json:"groups"`
-
-	// Hostname Hostname of the machine
-	Hostname string `json:"hostname"`
-
-	// Id Peer ID
-	Id string `json:"id"`
+	// InactivityExpirationEnabled Indicates whether peer inactivity expiration has been enabled or not
+	InactivityExpirationEnabled bool `json:"inactivity_expiration_enabled"`
 
 	// Ip Peer's IP address
 	Ip string `json:"ip"`
@@ -649,6 +622,9 @@ type PeerBatch struct {
 	// Id Peer ID
 	Id string `json:"id"`
 
+	// InactivityExpirationEnabled Indicates whether peer inactivity expiration has been enabled or not
+	InactivityExpirationEnabled bool `json:"inactivity_expiration_enabled"`
+
 	// Ip Peer's IP address
 	Ip string `json:"ip"`
 
@@ -713,10 +689,11 @@ type PeerNetworkRangeCheckAction string
 // PeerRequest defines model for PeerRequest.
 type PeerRequest struct {
 	// ApprovalRequired (Cloud only) Indicates whether peer needs approval
-	ApprovalRequired       *bool  `json:"approval_required,omitempty"`
-	LoginExpirationEnabled bool   `json:"login_expiration_enabled"`
-	Name                   string `json:"name"`
-	SshEnabled             bool   `json:"ssh_enabled"`
+	ApprovalRequired            *bool  `json:"approval_required,omitempty"`
+	InactivityExpirationEnabled bool   `json:"inactivity_expiration_enabled"`
+	LoginExpirationEnabled      bool   `json:"login_expiration_enabled"`
+	Name                        string `json:"name"`
+	SshEnabled                  bool   `json:"ssh_enabled"`
 }
 
 // PersonalAccessToken defines model for PersonalAccessToken.
@@ -816,7 +793,10 @@ type PolicyRule struct {
 	// Name Policy rule name identifier
 	Name string `json:"name"`
 
-	// Ports Policy rule affected ports or it ranges list
+	// PortRanges Policy rule affected ports ranges list
+	PortRanges *[]RulePortRange `json:"port_ranges,omitempty"`
+
+	// Ports Policy rule affected ports
 	Ports *[]string `json:"ports,omitempty"`
 
 	// Protocol Policy rule type of the traffic
@@ -852,7 +832,10 @@ type PolicyRuleMinimum struct {
 	// Name Policy rule name identifier
 	Name string `json:"name"`
 
-	// Ports Policy rule affected ports or it ranges list
+	// PortRanges Policy rule affected ports ranges list
+	PortRanges *[]RulePortRange `json:"port_ranges,omitempty"`
+
+	// Ports Policy rule affected ports
 	Ports *[]string `json:"ports,omitempty"`
 
 	// Protocol Policy rule type of the traffic
@@ -888,7 +871,10 @@ type PolicyRuleUpdate struct {
 	// Name Policy rule name identifier
 	Name string `json:"name"`
 
-	// Ports Policy rule affected ports or it ranges list
+	// PortRanges Policy rule affected ports ranges list
+	PortRanges *[]RulePortRange `json:"port_ranges,omitempty"`
+
+	// Ports Policy rule affected ports
 	Ports *[]string `json:"ports,omitempty"`
 
 	// Protocol Policy rule type of the traffic
@@ -971,10 +957,13 @@ type ProcessCheck struct {
 
 // Route defines model for Route.
 type Route struct {
+	// AccessControlGroups Access control group identifier associated with route.
+	AccessControlGroups *[]string `json:"access_control_groups,omitempty"`
+
 	// Description Route description
 	Description string `json:"description"`
 
-	// Domains Domain list to be dynamically resolved. Conflicts with network
+	// Domains Domain list to be dynamically resolved. Max of 32 domains can be added per route configuration. Conflicts with network
 	Domains *[]string `json:"domains,omitempty"`
 
 	// Enabled Route status
@@ -1013,10 +1002,13 @@ type Route struct {
 
 // RouteRequest defines model for RouteRequest.
 type RouteRequest struct {
+	// AccessControlGroups Access control group identifier associated with route.
+	AccessControlGroups *[]string `json:"access_control_groups,omitempty"`
+
 	// Description Route description
 	Description string `json:"description"`
 
-	// Domains Domain list to be dynamically resolved. Conflicts with network
+	// Domains Domain list to be dynamically resolved. Max of 32 domains can be added per route configuration. Conflicts with network
 	Domains *[]string `json:"domains,omitempty"`
 
 	// Enabled Route status
@@ -1047,6 +1039,15 @@ type RouteRequest struct {
 	PeerGroups *[]string `json:"peer_groups,omitempty"`
 }
 
+// RulePortRange Policy rule affected ports range
+type RulePortRange struct {
+	// End The ending port of the range
+	End int `json:"end"`
+
+	// Start The starting port of the range
+	Start int `json:"start"`
+}
+
 // SetupKey defines model for SetupKey.
 type SetupKey struct {
 	// AutoGroups List of group IDs to auto-assign to peers registered with this key
@@ -1061,7 +1062,94 @@ type SetupKey struct {
 	// Id Setup Key ID
 	Id string `json:"id"`
 
-	// Key Setup Key value
+	// Key Setup Key as secret
+	Key string `json:"key"`
+
+	// LastUsed Setup key last usage date
+	LastUsed time.Time `json:"last_used"`
+
+	// Name Setup key name identifier
+	Name string `json:"name"`
+
+	// Revoked Setup key revocation status
+	Revoked bool `json:"revoked"`
+
+	// State Setup key status, "valid", "overused","expired" or "revoked"
+	State string `json:"state"`
+
+	// Type Setup key type, one-off for single time usage and reusable
+	Type string `json:"type"`
+
+	// UpdatedAt Setup key last update date
+	UpdatedAt time.Time `json:"updated_at"`
+
+	// UsageLimit A number of times this key can be used. The value of 0 indicates the unlimited usage.
+	UsageLimit int `json:"usage_limit"`
+
+	// UsedTimes Usage count of setup key
+	UsedTimes int `json:"used_times"`
+
+	// Valid Setup key validity status
+	Valid bool `json:"valid"`
+}
+
+// SetupKeyBase defines model for SetupKeyBase.
+type SetupKeyBase struct {
+	// AutoGroups List of group IDs to auto-assign to peers registered with this key
+	AutoGroups []string `json:"auto_groups"`
+
+	// Ephemeral Indicate that the peer will be ephemeral or not
+	Ephemeral bool `json:"ephemeral"`
+
+	// Expires Setup Key expiration date
+	Expires time.Time `json:"expires"`
+
+	// Id Setup Key ID
+	Id string `json:"id"`
+
+	// LastUsed Setup key last usage date
+	LastUsed time.Time `json:"last_used"`
+
+	// Name Setup key name identifier
+	Name string `json:"name"`
+
+	// Revoked Setup key revocation status
+	Revoked bool `json:"revoked"`
+
+	// State Setup key status, "valid", "overused","expired" or "revoked"
+	State string `json:"state"`
+
+	// Type Setup key type, one-off for single time usage and reusable
+	Type string `json:"type"`
+
+	// UpdatedAt Setup key last update date
+	UpdatedAt time.Time `json:"updated_at"`
+
+	// UsageLimit A number of times this key can be used. The value of 0 indicates the unlimited usage.
+	UsageLimit int `json:"usage_limit"`
+
+	// UsedTimes Usage count of setup key
+	UsedTimes int `json:"used_times"`
+
+	// Valid Setup key validity status
+	Valid bool `json:"valid"`
+}
+
+// SetupKeyClear defines model for SetupKeyClear.
+type SetupKeyClear struct {
+	// AutoGroups List of group IDs to auto-assign to peers registered with this key
+	AutoGroups []string `json:"auto_groups"`
+
+	// Ephemeral Indicate that the peer will be ephemeral or not
+	Ephemeral bool `json:"ephemeral"`
+
+	// Expires Setup Key expiration date
+	Expires time.Time `json:"expires"`
+
+	// Id Setup Key ID
+	Id string `json:"id"`
+
+	// Key Setup Key as plain text
 	Key string `json:"key"`
 
 	// LastUsed Setup key last usage date
@@ -1097,23 +1185,8 @@ type SetupKeyRequest struct {
 	// AutoGroups List of group IDs to auto-assign to peers registered with this key
 	AutoGroups []string `json:"auto_groups"`
 
-	// Ephemeral Indicate that the peer will be ephemeral or not
-	Ephemeral *bool `json:"ephemeral,omitempty"`
-
-	// ExpiresIn Expiration time in seconds
-	ExpiresIn int `json:"expires_in"`
-
-	// Name Setup Key name
-	Name string `json:"name"`
-
 	// Revoked Setup key revocation status
 	Revoked bool `json:"revoked"`
-
-	// Type Setup key type, one-off for single time usage and reusable
-	Type string `json:"type"`
-
-	// UsageLimit A number of times this key can be used. The value of 0 indicates the unlimited usage.
-	UsageLimit int `json:"usage_limit"`
 }
 
 // User defines model for User.
@@ -1241,7 +1314,7 @@ type PostApiRoutesJSONRequestBody = RouteRequest
 type PutApiRoutesRouteIdJSONRequestBody = RouteRequest
 
 // PostApiSetupKeysJSONRequestBody defines body for PostApiSetupKeys for application/json ContentType.
-type PostApiSetupKeysJSONRequestBody = SetupKeyRequest
+type PostApiSetupKeysJSONRequestBody = CreateSetupKeyRequest
 
 // PutApiSetupKeysKeyIdJSONRequestBody defines body for PutApiSetupKeysKeyId for application/json ContentType.
 type PutApiSetupKeysKeyIdJSONRequestBody = SetupKeyRequest

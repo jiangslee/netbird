@@ -1,5 +1,4 @@
 //go:build !android
-// +build !android
 
 package system
 
@@ -8,6 +7,7 @@ import (
 	"context"
 	"os"
 	"os/exec"
+	"regexp"
 	"runtime"
 	"strings"
 	"time"
@@ -15,9 +15,12 @@ import (
 	log "github.com/sirupsen/logrus"
 	"github.com/zcalusic/sysinfo"
 
-	"github.com/netbirdio/netbird/client/system/detect_cloud"
-	"github.com/netbirdio/netbird/client/system/detect_platform"
 	"github.com/netbirdio/netbird/version"
+)
+
+var (
+	// it is override in tests
+	getSystemInfo = defaultSysInfoImplementation
 )
 
 // GetInfo retrieves and parses the system information
@@ -44,11 +47,10 @@ func GetInfo(ctx context.Context) *Info {
 		log.Warnf("failed to discover network addresses: %s", err)
 	}
 
-	serialNum, prodName, manufacturer := sysInfo()
-
-	env := Environment{
-		Cloud:    detect_cloud.Detect(ctx),
-		Platform: detect_platform.Detect(ctx),
+	start := time.Now()
+	si := updateStaticInfo()
+	if time.Since(start) > 1*time.Second {
+		log.Warnf("updateStaticInfo took %s", time.Since(start))
 	}
 
 	gio := &Info{
@@ -63,10 +65,10 @@ func GetInfo(ctx context.Context) *Info {
 		UIVersion:          extractUserAgent(ctx),
 		KernelVersion:      osInfo[1],
 		NetworkAddresses:   addrs,
-		SystemSerialNumber: serialNum,
-		SystemProductName:  prodName,
-		SystemManufacturer: manufacturer,
-		Environment:        env,
+		SystemSerialNumber: si.SystemSerialNumber,
+		SystemProductName:  si.SystemProductName,
+		SystemManufacturer: si.SystemManufacturer,
+		Environment:        si.Environment,
 	}
 
 	return gio
@@ -86,8 +88,49 @@ func _getInfo() string {
 	return out.String()
 }
 
-func sysInfo() (serialNumber string, productName string, manufacturer string) {
-	var si sysinfo.SysInfo
+func sysInfo() (string, string, string) {
+	isascii := regexp.MustCompile("^[[:ascii:]]+$")
+	si := getSystemInfo()
+	serials := []string{si.ChassisSerial, si.ProductSerial}
+	serial := ""
+
+	for _, s := range serials {
+		if isascii.MatchString(s) {
+			serial = s
+			if s != "Default string" {
+				break
+			}
+		}
+	}
+
+	if serial == "" && isascii.MatchString(si.BoardSerial) {
+		serial = si.BoardSerial
+	}
+
+	var name string
+	for _, n := range []string{si.ProductName, si.BoardName} {
+		if isascii.MatchString(n) {
+			name = n
+			break
+		}
+	}
+
+	var manufacturer string
+	if isascii.MatchString(si.ProductVendor) {
+		manufacturer = si.ProductVendor
+	}
+	return serial, name, manufacturer
+}
+
+func defaultSysInfoImplementation() SysInfo {
+	si := sysinfo.SysInfo{}
 	si.GetSysInfo()
-	return si.Chassis.Serial, si.Product.Name, si.Product.Vendor
+	return SysInfo{
+		ChassisSerial: si.Chassis.Serial,
+		ProductSerial: si.Product.Serial,
+		BoardSerial:   si.Board.Serial,
+		ProductName:   si.Product.Name,
+		BoardName:     si.Board.Name,
+		ProductVendor: si.Product.Vendor,
+	}
 }

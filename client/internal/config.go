@@ -2,6 +2,7 @@ package internal
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
 	"net/url"
 	"os"
@@ -15,9 +16,9 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
+	"github.com/netbirdio/netbird/client/iface"
 	"github.com/netbirdio/netbird/client/internal/routemanager/dynamic"
 	"github.com/netbirdio/netbird/client/ssh"
-	"github.com/netbirdio/netbird/iface"
 	mgm "github.com/netbirdio/netbird/management/client"
 	"github.com/netbirdio/netbird/util"
 )
@@ -45,6 +46,7 @@ type ConfigInput struct {
 	ManagementURL       string
 	AdminURL            string
 	ConfigPath          string
+	StateFilePath       string
 	PreSharedKey        *string
 	ServerSSHAllowed    *bool
 	NATExternalIPs      []string
@@ -57,6 +59,8 @@ type ConfigInput struct {
 	DisableAutoConnect  *bool
 	ExtraIFaceBlackList []string
 	DNSRouteInterval    *time.Duration
+	ClientCertPath      string
+	ClientCertKeyPath   string
 }
 
 // Config Configuration type
@@ -102,11 +106,23 @@ type Config struct {
 
 	// DNSRouteInterval is the interval in which the DNS routes are updated
 	DNSRouteInterval time.Duration
+	// Path to a certificate used for mTLS authentication
+	ClientCertPath string
+
+	// Path to corresponding private key of ClientCertPath
+	ClientCertKeyPath string
+
+	ClientCertKeyPair *tls.Certificate `json:"-"`
 }
 
 // ReadConfig read config file and return with Config. If it is not exists create a new with default values
 func ReadConfig(configPath string) (*Config, error) {
-	if configFileIsExists(configPath) {
+	if fileExists(configPath) {
+		err := util.EnforcePermission(configPath)
+		if err != nil {
+			log.Errorf("failed to enforce permission on config dir: %v", err)
+		}
+
 		config := &Config{}
 		if _, err := util.ReadJson(configPath, config); err != nil {
 			return nil, err
@@ -134,7 +150,7 @@ func ReadConfig(configPath string) (*Config, error) {
 
 // UpdateConfig update existing configuration according to input configuration and return with the configuration
 func UpdateConfig(input ConfigInput) (*Config, error) {
-	if !configFileIsExists(input.ConfigPath) {
+	if !fileExists(input.ConfigPath) {
 		return nil, status.Errorf(codes.NotFound, "config file doesn't exist")
 	}
 
@@ -143,18 +159,22 @@ func UpdateConfig(input ConfigInput) (*Config, error) {
 
 // UpdateOrCreateConfig reads existing config or generates a new one
 func UpdateOrCreateConfig(input ConfigInput) (*Config, error) {
-	if !configFileIsExists(input.ConfigPath) {
+	if !fileExists(input.ConfigPath) {
 		log.Infof("generating new config %s", input.ConfigPath)
 		cfg, err := createNewConfig(input)
 		if err != nil {
 			return nil, err
 		}
-		err = WriteOutConfig(input.ConfigPath, cfg)
+		err = util.WriteJsonWithRestrictedPermission(context.Background(), input.ConfigPath, cfg)
 		return cfg, err
 	}
 
 	if isPreSharedKeyHidden(input.PreSharedKey) {
 		input.PreSharedKey = nil
+	}
+	err := util.EnforcePermission(input.ConfigPath)
+	if err != nil {
+		log.Errorf("failed to enforce permission on config dir: %v", err)
 	}
 	return update(input)
 }
@@ -166,7 +186,7 @@ func CreateInMemoryConfig(input ConfigInput) (*Config, error) {
 
 // WriteOutConfig write put the prepared config to the given path
 func WriteOutConfig(path string, config *Config) error {
-	return util.WriteJson(path, config)
+	return util.WriteJson(context.Background(), path, config)
 }
 
 // createNewConfig creates a new config generating a new Wireguard key and saving to file
@@ -196,7 +216,7 @@ func update(input ConfigInput) (*Config, error) {
 	}
 
 	if updated {
-		if err := util.WriteJson(input.ConfigPath, config); err != nil {
+		if err := util.WriteJson(context.Background(), input.ConfigPath, config); err != nil {
 			return nil, err
 		}
 	}
@@ -385,6 +405,26 @@ func (config *Config) apply(input ConfigInput) (updated bool, err error) {
 
 	}
 
+	if input.ClientCertKeyPath != "" {
+		config.ClientCertKeyPath = input.ClientCertKeyPath
+		updated = true
+	}
+
+	if input.ClientCertPath != "" {
+		config.ClientCertPath = input.ClientCertPath
+		updated = true
+	}
+
+	if config.ClientCertPath != "" && config.ClientCertKeyPath != "" {
+		cert, err := tls.LoadX509KeyPair(config.ClientCertPath, config.ClientCertKeyPath)
+		if err != nil {
+			log.Error("Failed to load mTLS cert/key pair: ", err)
+		} else {
+			config.ClientCertKeyPair = &cert
+			log.Info("Loaded client mTLS cert/key pair")
+		}
+	}
+
 	return updated, nil
 }
 
@@ -433,9 +473,17 @@ func isPreSharedKeyHidden(preSharedKey *string) bool {
 	return false
 }
 
-func configFileIsExists(path string) bool {
+func fileExists(path string) bool {
 	_, err := os.Stat(path)
 	return !os.IsNotExist(err)
+}
+
+func createFile(path string) error {
+	file, err := os.Create(path)
+	if err != nil {
+		return err
+	}
+	return file.Close()
 }
 
 // UpdateOldManagementURL checks whether client can switch to the new Management URL with port 443 and the management domain.

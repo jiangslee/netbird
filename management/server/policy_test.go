@@ -1,9 +1,11 @@
 package server
 
 import (
+	"context"
 	"fmt"
 	"net"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"golang.org/x/exp/slices"
@@ -143,14 +145,14 @@ func TestAccount_getPeersByPolicy(t *testing.T) {
 
 	t.Run("check that all peers get map", func(t *testing.T) {
 		for _, p := range account.Peers {
-			peers, firewallRules := account.getPeerConnectionResources(p.ID, validatedPeers)
+			peers, firewallRules := account.getPeerConnectionResources(context.Background(), p.ID, validatedPeers)
 			assert.GreaterOrEqual(t, len(peers), 2, "minimum number peers should present")
 			assert.GreaterOrEqual(t, len(firewallRules), 2, "minimum number of firewall rules should present")
 		}
 	})
 
 	t.Run("check first peer map details", func(t *testing.T) {
-		peers, firewallRules := account.getPeerConnectionResources("peerB", validatedPeers)
+		peers, firewallRules := account.getPeerConnectionResources(context.Background(), "peerB", validatedPeers)
 		assert.Len(t, peers, 7)
 		assert.Contains(t, peers, account.Peers["peerA"])
 		assert.Contains(t, peers, account.Peers["peerC"])
@@ -386,7 +388,7 @@ func TestAccount_getPeersByPolicyDirect(t *testing.T) {
 	}
 
 	t.Run("check first peer map", func(t *testing.T) {
-		peers, firewallRules := account.getPeerConnectionResources("peerB", approvedPeers)
+		peers, firewallRules := account.getPeerConnectionResources(context.Background(), "peerB", approvedPeers)
 		assert.Contains(t, peers, account.Peers["peerC"])
 
 		epectedFirewallRules := []*FirewallRule{
@@ -414,7 +416,7 @@ func TestAccount_getPeersByPolicyDirect(t *testing.T) {
 	})
 
 	t.Run("check second peer map", func(t *testing.T) {
-		peers, firewallRules := account.getPeerConnectionResources("peerC", approvedPeers)
+		peers, firewallRules := account.getPeerConnectionResources(context.Background(), "peerC", approvedPeers)
 		assert.Contains(t, peers, account.Peers["peerB"])
 
 		epectedFirewallRules := []*FirewallRule{
@@ -444,7 +446,7 @@ func TestAccount_getPeersByPolicyDirect(t *testing.T) {
 	account.Policies[1].Rules[0].Bidirectional = false
 
 	t.Run("check first peer map directional only", func(t *testing.T) {
-		peers, firewallRules := account.getPeerConnectionResources("peerB", approvedPeers)
+		peers, firewallRules := account.getPeerConnectionResources(context.Background(), "peerB", approvedPeers)
 		assert.Contains(t, peers, account.Peers["peerC"])
 
 		epectedFirewallRules := []*FirewallRule{
@@ -465,7 +467,7 @@ func TestAccount_getPeersByPolicyDirect(t *testing.T) {
 	})
 
 	t.Run("check second peer map directional only", func(t *testing.T) {
-		peers, firewallRules := account.getPeerConnectionResources("peerC", approvedPeers)
+		peers, firewallRules := account.getPeerConnectionResources(context.Background(), "peerC", approvedPeers)
 		assert.Contains(t, peers, account.Peers["peerB"])
 
 		epectedFirewallRules := []*FirewallRule{
@@ -662,7 +664,7 @@ func TestAccount_getPeersByPolicyPostureChecks(t *testing.T) {
 	t.Run("verify peer's network map with default group peer list", func(t *testing.T) {
 		// peerB doesn't fulfill the NB posture check but is included in the destination group Swarm,
 		// will establish a connection with all source peers satisfying the NB posture check.
-		peers, firewallRules := account.getPeerConnectionResources("peerB", approvedPeers)
+		peers, firewallRules := account.getPeerConnectionResources(context.Background(), "peerB", approvedPeers)
 		assert.Len(t, peers, 4)
 		assert.Len(t, firewallRules, 4)
 		assert.Contains(t, peers, account.Peers["peerA"])
@@ -672,7 +674,7 @@ func TestAccount_getPeersByPolicyPostureChecks(t *testing.T) {
 
 		// peerC satisfy the NB posture check, should establish connection to all destination group peer's
 		// We expect a single permissive firewall rule which all outgoing connections
-		peers, firewallRules = account.getPeerConnectionResources("peerC", approvedPeers)
+		peers, firewallRules = account.getPeerConnectionResources(context.Background(), "peerC", approvedPeers)
 		assert.Len(t, peers, len(account.Groups["GroupSwarm"].Peers))
 		assert.Len(t, firewallRules, 1)
 		expectedFirewallRules := []*FirewallRule{
@@ -688,7 +690,7 @@ func TestAccount_getPeersByPolicyPostureChecks(t *testing.T) {
 
 		// peerE doesn't fulfill the NB posture check and exists in only destination group Swarm,
 		// all source group peers satisfying the NB posture check should establish connection
-		peers, firewallRules = account.getPeerConnectionResources("peerE", approvedPeers)
+		peers, firewallRules = account.getPeerConnectionResources(context.Background(), "peerE", approvedPeers)
 		assert.Len(t, peers, 4)
 		assert.Len(t, firewallRules, 4)
 		assert.Contains(t, peers, account.Peers["peerA"])
@@ -698,7 +700,7 @@ func TestAccount_getPeersByPolicyPostureChecks(t *testing.T) {
 
 		// peerI doesn't fulfill the OS version posture check and exists in only destination group Swarm,
 		// all source group peers satisfying the NB posture check should establish connection
-		peers, firewallRules = account.getPeerConnectionResources("peerI", approvedPeers)
+		peers, firewallRules = account.getPeerConnectionResources(context.Background(), "peerI", approvedPeers)
 		assert.Len(t, peers, 4)
 		assert.Len(t, firewallRules, 4)
 		assert.Contains(t, peers, account.Peers["peerA"])
@@ -713,19 +715,19 @@ func TestAccount_getPeersByPolicyPostureChecks(t *testing.T) {
 
 		// peerB doesn't satisfy the NB posture check, and doesn't exist in destination group peer's
 		// no connection should be established to any peer of destination group
-		peers, firewallRules := account.getPeerConnectionResources("peerB", approvedPeers)
+		peers, firewallRules := account.getPeerConnectionResources(context.Background(), "peerB", approvedPeers)
 		assert.Len(t, peers, 0)
 		assert.Len(t, firewallRules, 0)
 
 		// peerI doesn't satisfy the OS version posture check, and doesn't exist in destination group peer's
 		// no connection should be established to any peer of destination group
-		peers, firewallRules = account.getPeerConnectionResources("peerI", approvedPeers)
+		peers, firewallRules = account.getPeerConnectionResources(context.Background(), "peerI", approvedPeers)
 		assert.Len(t, peers, 0)
 		assert.Len(t, firewallRules, 0)
 
 		// peerC satisfy the NB posture check, should establish connection to all destination group peer's
 		// We expect a single permissive firewall rule which all outgoing connections
-		peers, firewallRules = account.getPeerConnectionResources("peerC", approvedPeers)
+		peers, firewallRules = account.getPeerConnectionResources(context.Background(), "peerC", approvedPeers)
 		assert.Len(t, peers, len(account.Groups["GroupSwarm"].Peers))
 		assert.Len(t, firewallRules, len(account.Groups["GroupSwarm"].Peers))
 
@@ -740,14 +742,14 @@ func TestAccount_getPeersByPolicyPostureChecks(t *testing.T) {
 
 		// peerE doesn't fulfill the NB posture check and exists in only destination group Swarm,
 		// all source group peers satisfying the NB posture check should establish connection
-		peers, firewallRules = account.getPeerConnectionResources("peerE", approvedPeers)
+		peers, firewallRules = account.getPeerConnectionResources(context.Background(), "peerE", approvedPeers)
 		assert.Len(t, peers, 3)
 		assert.Len(t, firewallRules, 3)
 		assert.Contains(t, peers, account.Peers["peerA"])
 		assert.Contains(t, peers, account.Peers["peerC"])
 		assert.Contains(t, peers, account.Peers["peerD"])
 
-		peers, firewallRules = account.getPeerConnectionResources("peerA", approvedPeers)
+		peers, firewallRules = account.getPeerConnectionResources(context.Background(), "peerA", approvedPeers)
 		assert.Len(t, peers, 5)
 		// assert peers from Group Swarm
 		assert.Contains(t, peers, account.Peers["peerD"])
@@ -822,4 +824,284 @@ func sortFunc() func(a *FirewallRule, b *FirewallRule) int {
 		}
 		return 0 // a is equal to b
 	}
+}
+
+func TestPolicyAccountPeersUpdate(t *testing.T) {
+	manager, account, peer1, peer2, peer3 := setupNetworkMapTest(t)
+
+	err := manager.SaveGroups(context.Background(), account.Id, userID, []*nbgroup.Group{
+		{
+			ID:    "groupA",
+			Name:  "GroupA",
+			Peers: []string{peer1.ID, peer3.ID},
+		},
+		{
+			ID:    "groupB",
+			Name:  "GroupB",
+			Peers: []string{},
+		},
+		{
+			ID:    "groupC",
+			Name:  "GroupC",
+			Peers: []string{},
+		},
+		{
+			ID:    "groupD",
+			Name:  "GroupD",
+			Peers: []string{peer1.ID, peer2.ID},
+		},
+	})
+	assert.NoError(t, err)
+
+	updMsg := manager.peersUpdateManager.CreateChannel(context.Background(), peer1.ID)
+	t.Cleanup(func() {
+		manager.peersUpdateManager.CloseChannel(context.Background(), peer1.ID)
+	})
+
+	var policyWithGroupRulesNoPeers *Policy
+	var policyWithDestinationPeersOnly *Policy
+	var policyWithSourceAndDestinationPeers *Policy
+
+	// Saving policy with rule groups with no peers should not update account's peers and not send peer update
+	t.Run("saving policy with rule groups with no peers", func(t *testing.T) {
+		done := make(chan struct{})
+		go func() {
+			peerShouldNotReceiveUpdate(t, updMsg)
+			close(done)
+		}()
+
+		policyWithGroupRulesNoPeers, err = manager.SavePolicy(context.Background(), account.Id, userID, &Policy{
+			AccountID: account.Id,
+			Enabled:   true,
+			Rules: []*PolicyRule{
+				{
+					Enabled:       true,
+					Sources:       []string{"groupB"},
+					Destinations:  []string{"groupC"},
+					Bidirectional: true,
+					Action:        PolicyTrafficActionAccept,
+				},
+			},
+		})
+		assert.NoError(t, err)
+
+		select {
+		case <-done:
+		case <-time.After(time.Second):
+			t.Error("timeout waiting for peerShouldNotReceiveUpdate")
+		}
+	})
+
+	// Saving policy with source group containing peers, but destination group without peers should
+	// update account's peers and send peer update
+	t.Run("saving policy where source has peers but destination does not", func(t *testing.T) {
+		done := make(chan struct{})
+		go func() {
+			peerShouldReceiveUpdate(t, updMsg)
+			close(done)
+		}()
+
+		_, err = manager.SavePolicy(context.Background(), account.Id, userID, &Policy{
+			AccountID: account.Id,
+			Enabled:   true,
+			Rules: []*PolicyRule{
+				{
+					Enabled:       true,
+					Sources:       []string{"groupA"},
+					Destinations:  []string{"groupB"},
+					Protocol:      PolicyRuleProtocolTCP,
+					Bidirectional: true,
+					Action:        PolicyTrafficActionAccept,
+				},
+			},
+		})
+		assert.NoError(t, err)
+
+		select {
+		case <-done:
+		case <-time.After(time.Second):
+			t.Error("timeout waiting for peerShouldReceiveUpdate")
+		}
+	})
+
+	// Saving policy with destination group containing peers, but source group without peers should
+	// update account's peers and send peer update
+	t.Run("saving policy where destination has peers but source does not", func(t *testing.T) {
+		done := make(chan struct{})
+		go func() {
+			peerShouldReceiveUpdate(t, updMsg)
+			close(done)
+		}()
+
+		policyWithDestinationPeersOnly, err = manager.SavePolicy(context.Background(), account.Id, userID, &Policy{
+			AccountID: account.Id,
+			Enabled:   true,
+			Rules: []*PolicyRule{
+				{
+					Enabled:       true,
+					Sources:       []string{"groupC"},
+					Destinations:  []string{"groupD"},
+					Bidirectional: true,
+					Protocol:      PolicyRuleProtocolTCP,
+					Action:        PolicyTrafficActionAccept,
+				},
+			},
+		})
+		assert.NoError(t, err)
+
+		select {
+		case <-done:
+		case <-time.After(time.Second):
+			t.Error("timeout waiting for peerShouldReceiveUpdate")
+		}
+	})
+
+	// Saving policy with destination and source groups containing peers should update account's peers
+	// and send peer update
+	t.Run("saving policy with source and destination groups with peers", func(t *testing.T) {
+		done := make(chan struct{})
+		go func() {
+			peerShouldReceiveUpdate(t, updMsg)
+			close(done)
+		}()
+
+		policyWithSourceAndDestinationPeers, err = manager.SavePolicy(context.Background(), account.Id, userID, &Policy{
+			AccountID: account.Id,
+			Enabled:   true,
+			Rules: []*PolicyRule{
+				{
+					Enabled:       true,
+					Sources:       []string{"groupA"},
+					Destinations:  []string{"groupD"},
+					Bidirectional: true,
+					Action:        PolicyTrafficActionAccept,
+				},
+			},
+		})
+		assert.NoError(t, err)
+
+		select {
+		case <-done:
+		case <-time.After(time.Second):
+			t.Error("timeout waiting for peerShouldReceiveUpdate")
+		}
+	})
+
+	// Disabling policy with destination and source groups containing peers should update account's peers
+	// and send peer update
+	t.Run("disabling policy with source and destination groups with peers", func(t *testing.T) {
+		done := make(chan struct{})
+		go func() {
+			peerShouldReceiveUpdate(t, updMsg)
+			close(done)
+		}()
+
+		policyWithSourceAndDestinationPeers.Enabled = false
+		policyWithSourceAndDestinationPeers, err = manager.SavePolicy(context.Background(), account.Id, userID, policyWithSourceAndDestinationPeers)
+		assert.NoError(t, err)
+
+		select {
+		case <-done:
+		case <-time.After(time.Second):
+			t.Error("timeout waiting for peerShouldReceiveUpdate")
+		}
+	})
+
+	// Updating disabled policy with destination and source groups containing peers should not update account's peers
+	// or send peer update
+	t.Run("updating disabled policy with source and destination groups with peers", func(t *testing.T) {
+		done := make(chan struct{})
+		go func() {
+			peerShouldNotReceiveUpdate(t, updMsg)
+			close(done)
+		}()
+
+		policyWithSourceAndDestinationPeers.Description = "updated description"
+		policyWithSourceAndDestinationPeers.Rules[0].Destinations = []string{"groupA"}
+		policyWithSourceAndDestinationPeers, err = manager.SavePolicy(context.Background(), account.Id, userID, policyWithSourceAndDestinationPeers)
+		assert.NoError(t, err)
+
+		select {
+		case <-done:
+		case <-time.After(time.Second):
+			t.Error("timeout waiting for peerShouldNotReceiveUpdate")
+		}
+	})
+
+	// Enabling policy with destination and source groups containing peers should update account's peers
+	// and send peer update
+	t.Run("enabling policy with source and destination groups with peers", func(t *testing.T) {
+		done := make(chan struct{})
+		go func() {
+			peerShouldReceiveUpdate(t, updMsg)
+			close(done)
+		}()
+
+		policyWithSourceAndDestinationPeers.Enabled = true
+		policyWithSourceAndDestinationPeers, err = manager.SavePolicy(context.Background(), account.Id, userID, policyWithSourceAndDestinationPeers)
+		assert.NoError(t, err)
+
+		select {
+		case <-done:
+		case <-time.After(time.Second):
+			t.Error("timeout waiting for peerShouldReceiveUpdate")
+		}
+	})
+
+	// Deleting policy should trigger account peers update and send peer update
+	t.Run("deleting policy with source and destination groups with peers", func(t *testing.T) {
+		done := make(chan struct{})
+		go func() {
+			peerShouldReceiveUpdate(t, updMsg)
+			close(done)
+		}()
+
+		err := manager.DeletePolicy(context.Background(), account.Id, policyWithSourceAndDestinationPeers.ID, userID)
+		assert.NoError(t, err)
+
+		select {
+		case <-done:
+		case <-time.After(time.Second):
+			t.Error("timeout waiting for peerShouldReceiveUpdate")
+		}
+
+	})
+
+	// Deleting policy with destination group containing peers, but source group without peers should
+	// update account's peers and send peer update
+	t.Run("deleting policy where destination has peers but source does not", func(t *testing.T) {
+		done := make(chan struct{})
+		go func() {
+			peerShouldReceiveUpdate(t, updMsg)
+			close(done)
+		}()
+
+		err := manager.DeletePolicy(context.Background(), account.Id, policyWithDestinationPeersOnly.ID, userID)
+		assert.NoError(t, err)
+
+		select {
+		case <-done:
+		case <-time.After(time.Second):
+			t.Error("timeout waiting for peerShouldReceiveUpdate")
+		}
+	})
+
+	// Deleting policy with no peers in groups should not update account's peers and not send peer update
+	t.Run("deleting policy with no peers in groups", func(t *testing.T) {
+		done := make(chan struct{})
+		go func() {
+			peerShouldNotReceiveUpdate(t, updMsg)
+			close(done)
+		}()
+
+		err := manager.DeletePolicy(context.Background(), account.Id, policyWithGroupRulesNoPeers.ID, userID)
+		assert.NoError(t, err)
+
+		select {
+		case <-done:
+		case <-time.After(time.Second):
+			t.Error("timeout waiting for peerShouldNotReceiveUpdate")
+		}
+	})
+
 }

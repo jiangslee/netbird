@@ -15,16 +15,19 @@ import (
 	"golang.zx2c4.com/wireguard/wgctrl/wgtypes"
 
 	"github.com/netbirdio/netbird/client/firewall/uspfilter"
+	"github.com/netbirdio/netbird/client/iface"
+	"github.com/netbirdio/netbird/client/iface/configurer"
+	"github.com/netbirdio/netbird/client/iface/device"
+	pfmock "github.com/netbirdio/netbird/client/iface/mocks"
 	"github.com/netbirdio/netbird/client/internal/peer"
+	"github.com/netbirdio/netbird/client/internal/statemanager"
 	"github.com/netbirdio/netbird/client/internal/stdnet"
 	nbdns "github.com/netbirdio/netbird/dns"
 	"github.com/netbirdio/netbird/formatter"
-	"github.com/netbirdio/netbird/iface"
-	pfmock "github.com/netbirdio/netbird/iface/mocks"
 )
 
 type mocWGIface struct {
-	filter iface.PacketFilter
+	filter device.PacketFilter
 }
 
 func (w *mocWGIface) Name() string {
@@ -43,11 +46,11 @@ func (w *mocWGIface) ToInterface() *net.Interface {
 	panic("implement me")
 }
 
-func (w *mocWGIface) GetFilter() iface.PacketFilter {
+func (w *mocWGIface) GetFilter() device.PacketFilter {
 	return w.filter
 }
 
-func (w *mocWGIface) GetDevice() *iface.DeviceWrapper {
+func (w *mocWGIface) GetDevice() *device.FilteredDevice {
 	panic("implement me")
 }
 
@@ -59,13 +62,13 @@ func (w *mocWGIface) IsUserspaceBind() bool {
 	return false
 }
 
-func (w *mocWGIface) SetFilter(filter iface.PacketFilter) error {
+func (w *mocWGIface) SetFilter(filter device.PacketFilter) error {
 	w.filter = filter
 	return nil
 }
 
-func (w *mocWGIface) GetStats(_ string) (iface.WGStats, error) {
-	return iface.WGStats{}, nil
+func (w *mocWGIface) GetStats(_ string) (configurer.WGStats, error) {
+	return configurer.WGStats{}, nil
 }
 
 var zoneRecords = []nbdns.SimpleRecord{
@@ -265,7 +268,17 @@ func TestUpdateDNSServer(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			wgIface, err := iface.NewWGIFace(fmt.Sprintf("utun230%d", n), fmt.Sprintf("100.66.100.%d/32", n+1), 33100, privKey.String(), iface.DefaultMTU, newNet, nil, nil)
+
+			opts := iface.WGIFaceOpts{
+				IFaceName:    fmt.Sprintf("utun230%d", n),
+				Address:      fmt.Sprintf("100.66.100.%d/32", n+1),
+				WGPort:       33100,
+				WGPrivKey:    privKey.String(),
+				MTU:          iface.DefaultMTU,
+				TransportNet: newNet,
+			}
+
+			wgIface, err := iface.NewWGIFace(opts)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -279,7 +292,7 @@ func TestUpdateDNSServer(t *testing.T) {
 					t.Log(err)
 				}
 			}()
-			dnsServer, err := NewDefaultServer(context.Background(), wgIface, "", &peer.Status{})
+			dnsServer, err := NewDefaultServer(context.Background(), wgIface, "", &peer.Status{}, nil)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -343,7 +356,15 @@ func TestDNSFakeResolverHandleUpdates(t *testing.T) {
 	}
 
 	privKey, _ := wgtypes.GeneratePrivateKey()
-	wgIface, err := iface.NewWGIFace("utun2301", "100.66.100.1/32", 33100, privKey.String(), iface.DefaultMTU, newNet, nil, nil)
+	opts := iface.WGIFaceOpts{
+		IFaceName:    "utun2301",
+		Address:      "100.66.100.1/32",
+		WGPort:       33100,
+		WGPrivKey:    privKey.String(),
+		MTU:          iface.DefaultMTU,
+		TransportNet: newNet,
+	}
+	wgIface, err := iface.NewWGIFace(opts)
 	if err != nil {
 		t.Errorf("build interface wireguard: %v", err)
 		return
@@ -380,7 +401,7 @@ func TestDNSFakeResolverHandleUpdates(t *testing.T) {
 		return
 	}
 
-	dnsServer, err := NewDefaultServer(context.Background(), wgIface, "", &peer.Status{})
+	dnsServer, err := NewDefaultServer(context.Background(), wgIface, "", &peer.Status{}, nil)
 	if err != nil {
 		t.Errorf("create DNS server: %v", err)
 		return
@@ -475,7 +496,7 @@ func TestDNSServerStartStop(t *testing.T) {
 
 	for _, testCase := range testCases {
 		t.Run(testCase.name, func(t *testing.T) {
-			dnsServer, err := NewDefaultServer(context.Background(), &mocWGIface{}, testCase.addrPort, &peer.Status{})
+			dnsServer, err := NewDefaultServer(context.Background(), &mocWGIface{}, testCase.addrPort, &peer.Status{}, nil)
 			if err != nil {
 				t.Fatalf("%v", err)
 			}
@@ -534,7 +555,8 @@ func TestDNSServerStartStop(t *testing.T) {
 func TestDNSServerUpstreamDeactivateCallback(t *testing.T) {
 	hostManager := &mockHostConfigurator{}
 	server := DefaultServer{
-		service: newServiceViaMemory(&mocWGIface{}),
+		ctx:     context.Background(),
+		service: NewServiceViaMemory(&mocWGIface{}),
 		localResolver: &localResolver{
 			registeredMap: make(registrationMap),
 		},
@@ -550,7 +572,7 @@ func TestDNSServerUpstreamDeactivateCallback(t *testing.T) {
 	}
 
 	var domainsUpdate string
-	hostManager.applyDNSConfigFunc = func(config HostDNSConfig) error {
+	hostManager.applyDNSConfigFunc = func(config HostDNSConfig, statemanager *statemanager.Manager) error {
 		domains := []string{}
 		for _, item := range config.Domains {
 			if item.Disabled {
@@ -760,7 +782,7 @@ func TestDNSPermanent_matchOnly(t *testing.T) {
 						Port:   53,
 					},
 				},
-				Domains: []string{"customdomain.com"},
+				Domains: []string{"google.com"},
 				Primary: false,
 			},
 		},
@@ -782,7 +804,7 @@ func TestDNSPermanent_matchOnly(t *testing.T) {
 	if ips[0] != zoneRecords[0].RData {
 		t.Fatalf("invalid zone record: %v", err)
 	}
-	_, err = resolver.LookupHost(context.Background(), "customdomain.com")
+	_, err = resolver.LookupHost(context.Background(), "google.com")
 	if err != nil {
 		t.Errorf("failed to resolve: %s", err)
 	}
@@ -801,7 +823,17 @@ func createWgInterfaceWithBind(t *testing.T) (*iface.WGIface, error) {
 	}
 
 	privKey, _ := wgtypes.GeneratePrivateKey()
-	wgIface, err := iface.NewWGIFace("utun2301", "100.66.100.2/24", 33100, privKey.String(), iface.DefaultMTU, newNet, nil, nil)
+
+	opts := iface.WGIFaceOpts{
+		IFaceName:    "utun2301",
+		Address:      "100.66.100.2/24",
+		WGPort:       33100,
+		WGPrivKey:    privKey.String(),
+		MTU:          iface.DefaultMTU,
+		TransportNet: newNet,
+	}
+
+	wgIface, err := iface.NewWGIFace(opts)
 	if err != nil {
 		t.Fatalf("build interface wireguard: %v", err)
 		return nil, err

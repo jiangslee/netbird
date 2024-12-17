@@ -45,7 +45,20 @@ service DaemonService {
 
   // SetLogLevel sets the log level of the daemon
   rpc SetLogLevel(SetLogLevelRequest) returns (SetLogLevelResponse) {}
-};
+
+  // List all states
+  rpc ListStates(ListStatesRequest) returns (ListStatesResponse) {}
+
+  // Clean specific state or all states
+  rpc CleanState(CleanStateRequest) returns (CleanStateResponse) {}
+
+  // Delete specific state or all states
+  rpc DeleteState(DeleteStateRequest) returns (DeleteStateResponse) {}
+
+  // SetNetworkMapPersistence enables or disables network map persistence
+  rpc SetNetworkMapPersistence(SetNetworkMapPersistenceRequest) returns (SetNetworkMapPersistenceResponse) {}
+}
+
 
 message LoginRequest {
   // setupKey wiretrustee setup key.
@@ -168,7 +181,6 @@ message PeerState {
   string connStatus = 3;
   google.protobuf.Timestamp connStatusUpdate = 4;
   bool relayed = 5;
-  bool direct = 6;
   string localIceCandidateType = 7;
   string remoteIceCandidateType = 8;
   string fqdn = 9;
@@ -180,6 +192,7 @@ message PeerState {
   bool rosenpassEnabled = 15;
   repeated string routes = 16;
   google.protobuf.Duration latency = 17;
+  string relayAddress = 18;
 }
 
 // LocalPeerState contains the latest state of the local peer
@@ -263,6 +276,7 @@ message Route {
 message DebugBundleRequest {
   bool anonymize = 1;
   string status = 2;
+  bool systemInfo = 3;
 }
 
 message DebugBundleResponse {
@@ -293,3 +307,45 @@ message SetLogLevelRequest {
 
 message SetLogLevelResponse {
 }
+
+// State represents a daemon state entry
+message State {
+  string name = 1;
+}
+
+// ListStatesRequest is empty as it requires no parameters
+message ListStatesRequest {}
+
+// ListStatesResponse contains a list of states
+message ListStatesResponse {
+  repeated State states = 1;
+}
+
+// CleanStateRequest for cleaning states
+message CleanStateRequest {
+  string state_name = 1;
+  bool all = 2;
+}
+
+// CleanStateResponse contains the result of the clean operation
+message CleanStateResponse {
+  int32 cleaned_states = 1;
+}
+
+// DeleteStateRequest for deleting states
+message DeleteStateRequest {
+  string state_name = 1;
+  bool all = 2;
+}
+
+// DeleteStateResponse contains the result of the delete operation
+message DeleteStateResponse {
+  int32 deleted_states = 1;
+}
+
+
+message SetNetworkMapPersistenceRequest {
+  bool enabled = 1;
+}
+
+message SetNetworkMapPersistenceResponse {}

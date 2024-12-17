@@ -3,7 +3,6 @@ package cmd
 import (
 	"context"
 	"net"
-	"path/filepath"
 	"testing"
 	"time"
 
@@ -11,6 +10,7 @@ import (
 	"go.opentelemetry.io/otel"
 
 	"github.com/netbirdio/netbird/management/server/activity"
+	"github.com/netbirdio/netbird/management/server/telemetry"
 
 	"github.com/netbirdio/netbird/util"
 
@@ -33,18 +33,12 @@ func startTestingServices(t *testing.T) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	testDir := t.TempDir()
-	config.Datadir = testDir
-	err = util.CopyFileContents("../testdata/store.json", filepath.Join(testDir, "store.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
 
 	_, signalLis := startSignal(t)
 	signalAddr := signalLis.Addr().String()
 	config.Signal.URI = signalAddr
 
-	_, mgmLis := startManagement(t, config)
+	_, mgmLis := startManagement(t, config, "../testdata/store.sql")
 	mgmAddr := mgmLis.Addr().String()
 	return mgmAddr
 }
@@ -56,7 +50,7 @@ func startSignal(t *testing.T) (*grpc.Server, net.Listener) {
 		t.Fatal(err)
 	}
 	s := grpc.NewServer()
-	srv, err := sig.NewServer(otel.Meter(""))
+	srv, err := sig.NewServer(context.Background(), otel.Meter(""))
 	require.NoError(t, err)
 
 	sigProto.RegisterSignalExchangeServer(s, srv)
@@ -69,14 +63,15 @@ func startSignal(t *testing.T) (*grpc.Server, net.Listener) {
 	return s, lis
 }
 
-func startManagement(t *testing.T, config *mgmt.Config) (*grpc.Server, net.Listener) {
+func startManagement(t *testing.T, config *mgmt.Config, testFile string) (*grpc.Server, net.Listener) {
 	t.Helper()
+
 	lis, err := net.Listen("tcp", ":0")
 	if err != nil {
 		t.Fatal(err)
 	}
 	s := grpc.NewServer()
-	store, cleanUp, err := mgmt.NewTestStoreFromJson(config.Datadir)
+	store, cleanUp, err := mgmt.NewTestStoreFromSQL(context.Background(), testFile, t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -87,13 +82,18 @@ func startManagement(t *testing.T, config *mgmt.Config) (*grpc.Server, net.Liste
 	if err != nil {
 		return nil, nil
 	}
-	iv, _ := integrations.NewIntegratedValidator(eventStore)
-	accountManager, err := mgmt.BuildManager(store, peersUpdateManager, nil, "", "netbird.selfhosted", eventStore, nil, false, iv)
+	iv, _ := integrations.NewIntegratedValidator(context.Background(), eventStore)
+
+	metrics, err := telemetry.NewDefaultAppMetrics(context.Background())
+	require.NoError(t, err)
+
+	accountManager, err := mgmt.BuildManager(context.Background(), store, peersUpdateManager, nil, "", "netbird.selfhosted", eventStore, nil, false, iv, metrics)
 	if err != nil {
 		t.Fatal(err)
 	}
-	turnManager := mgmt.NewTimeBasedAuthSecretsManager(peersUpdateManager, config.TURNConfig)
-	mgmtServer, err := mgmt.NewServer(config, accountManager, peersUpdateManager, turnManager, nil, nil)
+
+	secretsManager := mgmt.NewTimeBasedAuthSecretsManager(peersUpdateManager, config.TURNConfig, config.Relay)
+	mgmtServer, err := mgmt.NewServer(context.Background(), config, accountManager, peersUpdateManager, secretsManager, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

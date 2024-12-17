@@ -12,7 +12,6 @@ import (
 
 	"github.com/cenkalti/backoff/v4"
 	"golang.org/x/exp/maps"
-
 	"google.golang.org/protobuf/types/known/durationpb"
 
 	log "github.com/sirupsen/logrus"
@@ -40,6 +39,8 @@ const (
 	defaultMaxRetryInterval = 60 * time.Minute
 	defaultMaxRetryTime     = 14 * 24 * time.Hour
 	defaultRetryMultiplier  = 1.7
+
+	errRestoreResidualState = "failed to restore residual state: %v"
 )
 
 // Server for service control.
@@ -67,6 +68,8 @@ type Server struct {
 	relayProbe  *internal.Probe
 	wgProbe     *internal.Probe
 	lastProbe   time.Time
+
+	persistNetworkMap bool
 }
 
 type oauthAuthFlow struct {
@@ -95,6 +98,14 @@ func (s *Server) Start() error {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
 	state := internal.CtxGetState(s.rootCtx)
+
+	if err := handlePanicLog(); err != nil {
+		log.Warnf("failed to redirect stderr: %v", err)
+	}
+
+	if err := restoreResidualState(s.rootCtx); err != nil {
+		log.Warnf(errRestoreResidualState, err)
+	}
 
 	// if current state contains any error, return it
 	// in all other cases we can continue execution only if status is idle and up command was
@@ -143,9 +154,11 @@ func (s *Server) Start() error {
 		s.sessionWatcher.SetOnExpireListener(s.onSessionExpire)
 	}
 
-	if !config.DisableAutoConnect {
-		go s.connectWithRetryRuns(ctx, config, s.statusRecorder, s.mgmProbe, s.signalProbe, s.relayProbe, s.wgProbe)
+	if config.DisableAutoConnect {
+		return nil
 	}
+
+	go s.connectWithRetryRuns(ctx, config, s.statusRecorder, nil)
 
 	return nil
 }
@@ -154,7 +167,7 @@ func (s *Server) Start() error {
 // mechanism to keep the client connected even when the connection is lost.
 // we cancel retry if the client receive a stop or down command, or if disable auto connect is configured.
 func (s *Server) connectWithRetryRuns(ctx context.Context, config *internal.Config, statusRecorder *peer.Status,
-	mgmProbe *internal.Probe, signalProbe *internal.Probe, relayProbe *internal.Probe, wgProbe *internal.Probe,
+	runningChan chan error,
 ) {
 	backOff := getConnectWithBackoff(ctx)
 	retryStarted := false
@@ -185,7 +198,16 @@ func (s *Server) connectWithRetryRuns(ctx context.Context, config *internal.Conf
 	runOperation := func() error {
 		log.Tracef("running client connection")
 		s.connectClient = internal.NewConnectClient(ctx, config, statusRecorder)
-		err := s.connectClient.RunWithProbes(mgmProbe, signalProbe, relayProbe, wgProbe)
+		s.connectClient.SetNetworkMapPersistence(s.persistNetworkMap)
+
+		probes := internal.ProbeHolder{
+			MgmProbe:    s.mgmProbe,
+			SignalProbe: s.signalProbe,
+			RelayProbe:  s.relayProbe,
+			WgProbe:     s.wgProbe,
+		}
+
+		err := s.connectClient.RunWithProbes(&probes, runningChan)
 		if err != nil {
 			log.Debugf("run client connection exited with error: %v. Will retry in the background", err)
 		}
@@ -282,6 +304,10 @@ func (s *Server) Login(callerCtx context.Context, msg *proto.LoginRequest) (*pro
 
 	s.actCancel = cancel
 	s.mutex.Unlock()
+
+	if err := restoreResidualState(ctx); err != nil {
+		log.Warnf(errRestoreResidualState, err)
+	}
 
 	state := internal.CtxGetState(ctx)
 	defer func() {
@@ -540,6 +566,10 @@ func (s *Server) Up(callerCtx context.Context, _ *proto.UpRequest) (*proto.UpRes
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
 
+	if err := restoreResidualState(callerCtx); err != nil {
+		log.Warnf(errRestoreResidualState, err)
+	}
+
 	state := internal.CtxGetState(s.rootCtx)
 
 	// if current state contains any error, return it
@@ -576,22 +606,46 @@ func (s *Server) Up(callerCtx context.Context, _ *proto.UpRequest) (*proto.UpRes
 	s.statusRecorder.UpdateManagementAddress(s.config.ManagementURL.String())
 	s.statusRecorder.UpdateRosenpass(s.config.RosenpassEnabled, s.config.RosenpassPermissive)
 
-	go s.connectWithRetryRuns(ctx, s.config, s.statusRecorder, s.mgmProbe, s.signalProbe, s.relayProbe, s.wgProbe)
+	runningChan := make(chan error)
+	go s.connectWithRetryRuns(ctx, s.config, s.statusRecorder, runningChan)
 
-	return &proto.UpResponse{}, nil
+	for {
+		select {
+		case err := <-runningChan:
+			if err != nil {
+				log.Debugf("waiting for engine to become ready failed: %s", err)
+			} else {
+				return &proto.UpResponse{}, nil
+			}
+		case <-callerCtx.Done():
+			log.Debug("context done, stopping the wait for engine to become ready")
+			return nil, callerCtx.Err()
+		}
+	}
 }
 
 // Down engine work in the daemon.
-func (s *Server) Down(_ context.Context, _ *proto.DownRequest) (*proto.DownResponse, error) {
+func (s *Server) Down(ctx context.Context, _ *proto.DownRequest) (*proto.DownResponse, error) {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
+
+	s.oauthAuthFlow = oauthAuthFlow{}
 
 	if s.actCancel == nil {
 		return nil, fmt.Errorf("service is not up")
 	}
 	s.actCancel()
+
+	err := s.connectClient.Stop()
+	if err != nil {
+		log.Errorf("failed to shut down properly: %v", err)
+		return nil, err
+	}
+
 	state := internal.CtxGetState(s.rootCtx)
 	state.Set(internal.StatusIdle)
+
+	log.Infof("service is down")
 
 	return &proto.DownResponse{}, nil
 }
@@ -727,11 +781,11 @@ func toProtoFullStatus(fullStatus peer.FullStatus) *proto.FullStatus {
 			ConnStatus:                 peerState.ConnStatus.String(),
 			ConnStatusUpdate:           timestamppb.New(peerState.ConnStatusUpdate),
 			Relayed:                    peerState.Relayed,
-			Direct:                     peerState.Direct,
 			LocalIceCandidateType:      peerState.LocalIceCandidateType,
 			RemoteIceCandidateType:     peerState.RemoteIceCandidateType,
 			LocalIceCandidateEndpoint:  peerState.LocalIceCandidateEndpoint,
 			RemoteIceCandidateEndpoint: peerState.RemoteIceCandidateEndpoint,
+			RelayAddress:               peerState.RelayServerAddress,
 			Fqdn:                       peerState.FQDN,
 			LastWireguardHandshake:     timestamppb.New(peerState.LastWireguardHandshake),
 			BytesRx:                    peerState.BytesRx,
@@ -745,7 +799,7 @@ func toProtoFullStatus(fullStatus peer.FullStatus) *proto.FullStatus {
 
 	for _, relayState := range fullStatus.Relays {
 		pbRelayState := &proto.RelayState{
-			URI:       relayState.URI.String(),
+			URI:       relayState.URI,
 			Available: relayState.Err == nil,
 		}
 		if err := relayState.Err; err != nil {

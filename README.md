@@ -10,13 +10,19 @@
   <img width="234" src="docs/media/logo-full.png"/>
 </p>
   <p>
+   <a href="https://img.shields.io/badge/license-BSD--3-blue)">
+       <img src="https://sonarcloud.io/api/project_badges/measure?project=netbirdio_netbird&metric=alert_status" />
+     </a> 
      <a href="https://github.com/netbirdio/netbird/blob/main/LICENSE">
        <img src="https://img.shields.io/badge/license-BSD--3-blue" />
      </a> 
-   <a href="https://www.codacy.com/gh/netbirdio/netbird/dashboard?utm_source=github.com&amp;utm_medium=referral&amp;utm_content=netbirdio/netbird&amp;utm_campaign=Badge_Grade"><img src="https://app.codacy.com/project/badge/Grade/e3013d046aec44cdb7462c8673b00976"/></a>
     <br>
-    <a href="https://join.slack.com/t/netbirdio/shared_invite/zt-vrahf41g-ik1v7fV8du6t0RwxSrJ96A">
+    <a href="https://join.slack.com/t/netbirdio/shared_invite/zt-2utg2ncdz-W7LEB6toRBLE1Jca37dYpg">
         <img src="https://img.shields.io/badge/slack-@netbird-red.svg?logo=slack"/>
+     </a>  
+     <br>
+    <a href="https://gurubase.io/g/netbird">
+        <img src="https://img.shields.io/badge/Gurubase-Ask%20NetBird%20Guru-006BFF"/>
      </a>    
   </p>
 </div>
@@ -28,7 +34,7 @@
   <br/>
   See <a href="https://netbird.io/docs/">Documentation</a>
   <br/>
-   Join our <a href="https://join.slack.com/t/netbirdio/shared_invite/zt-vrahf41g-ik1v7fV8du6t0RwxSrJ96A">Slack channel</a>
+   Join our <a href="https://join.slack.com/t/netbirdio/shared_invite/zt-2utg2ncdz-W7LEB6toRBLE1Jca37dYpg">Slack channel</a>
   <br/>
  
 </strong>
@@ -47,6 +53,8 @@
 
 ![netbird_2](https://github.com/netbirdio/netbird/assets/700848/46bc3b73-508d-4a0e-bb9a-f465d68646ab)
 
+### NetBird on Lawrence Systems (Video)
+[![Watch the video](https://img.youtube.com/vi/Kwrff6h0rEw/0.jpg)](https://www.youtube.com/watch?v=Kwrff6h0rEw)
 
 ### Key features
 
@@ -60,6 +68,7 @@
 |                                                                                                                              |                                                                                                          | <ul><li> - \[x] [Quantum-resistance with Rosenpass](https://netbird.io/knowledge-hub/the-first-quantum-resistant-mesh-vpn) </ul></li> |                                                                                                                                          | <ul><li> - \[x] OpenWRT </ul></li>                                                      |
 |                                                                                                                              |                                                                                                          | <ui><li> - \[x] [Periodic re-authentication](https://docs.netbird.io/how-to/enforce-periodic-user-authentication)</ul></li>           |                                                                                                                                          | <ul><li> - \[x] [Serverless](https://docs.netbird.io/how-to/netbird-on-faas) </ul></li> |
 |                                                                                                                              |                                                                                                          |                                                                                                                                       |                                                                                                                                          | <ul><li> - \[x] Docker </ul></li>                                                       |
+
 ### Quickstart with NetBird Cloud
 
 - Download and install NetBird at [https://app.netbird.io/install](https://app.netbird.io/install)

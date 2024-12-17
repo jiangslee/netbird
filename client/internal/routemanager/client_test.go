@@ -1,6 +1,7 @@
 package routemanager
 
 import (
+	"fmt"
 	"net/netip"
 	"testing"
 	"time"
@@ -24,7 +25,6 @@ func TestGetBestrouteFromStatuses(t *testing.T) {
 				"route1": {
 					connected: true,
 					relayed:   false,
-					direct:    true,
 				},
 			},
 			existingRoutes: map[route.ID]*route.Route{
@@ -43,7 +43,6 @@ func TestGetBestrouteFromStatuses(t *testing.T) {
 				"route1": {
 					connected: true,
 					relayed:   true,
-					direct:    true,
 				},
 			},
 			existingRoutes: map[route.ID]*route.Route{
@@ -62,7 +61,6 @@ func TestGetBestrouteFromStatuses(t *testing.T) {
 				"route1": {
 					connected: true,
 					relayed:   true,
-					direct:    false,
 				},
 			},
 			existingRoutes: map[route.ID]*route.Route{
@@ -81,7 +79,6 @@ func TestGetBestrouteFromStatuses(t *testing.T) {
 				"route1": {
 					connected: false,
 					relayed:   false,
-					direct:    false,
 				},
 			},
 			existingRoutes: map[route.ID]*route.Route{
@@ -100,12 +97,10 @@ func TestGetBestrouteFromStatuses(t *testing.T) {
 				"route1": {
 					connected: true,
 					relayed:   false,
-					direct:    true,
 				},
 				"route2": {
 					connected: true,
 					relayed:   false,
-					direct:    true,
 				},
 			},
 			existingRoutes: map[route.ID]*route.Route{
@@ -129,41 +124,10 @@ func TestGetBestrouteFromStatuses(t *testing.T) {
 				"route1": {
 					connected: true,
 					relayed:   false,
-					direct:    true,
 				},
 				"route2": {
 					connected: true,
 					relayed:   true,
-					direct:    true,
-				},
-			},
-			existingRoutes: map[route.ID]*route.Route{
-				"route1": {
-					ID:     "route1",
-					Metric: route.MaxMetric,
-					Peer:   "peer1",
-				},
-				"route2": {
-					ID:     "route2",
-					Metric: route.MaxMetric,
-					Peer:   "peer2",
-				},
-			},
-			currentRoute:    "",
-			expectedRouteID: "route1",
-		},
-		{
-			name: "multiple connected peers with one direct",
-			statuses: map[route.ID]routerPeerStatus{
-				"route1": {
-					connected: true,
-					relayed:   false,
-					direct:    true,
-				},
-				"route2": {
-					connected: true,
-					relayed:   false,
-					direct:    false,
 				},
 			},
 			existingRoutes: map[route.ID]*route.Route{
@@ -241,14 +205,70 @@ func TestGetBestrouteFromStatuses(t *testing.T) {
 				"route1": {
 					connected: true,
 					relayed:   false,
-					direct:    true,
 					latency:   15 * time.Millisecond,
 				},
 				"route2": {
 					connected: true,
 					relayed:   false,
-					direct:    true,
 					latency:   10 * time.Millisecond,
+				},
+			},
+			existingRoutes: map[route.ID]*route.Route{
+				"route1": {
+					ID:     "route1",
+					Metric: route.MaxMetric,
+					Peer:   "peer1",
+				},
+				"route2": {
+					ID:     "route2",
+					Metric: route.MaxMetric,
+					Peer:   "peer2",
+				},
+			},
+			currentRoute:    "route1",
+			expectedRouteID: "route1",
+		},
+		{
+			name: "relayed routes with latency 0 should maintain previous choice",
+			statuses: map[route.ID]routerPeerStatus{
+				"route1": {
+					connected: true,
+					relayed:   true,
+					latency:   0 * time.Millisecond,
+				},
+				"route2": {
+					connected: true,
+					relayed:   true,
+					latency:   0 * time.Millisecond,
+				},
+			},
+			existingRoutes: map[route.ID]*route.Route{
+				"route1": {
+					ID:     "route1",
+					Metric: route.MaxMetric,
+					Peer:   "peer1",
+				},
+				"route2": {
+					ID:     "route2",
+					Metric: route.MaxMetric,
+					Peer:   "peer2",
+				},
+			},
+			currentRoute:    "route1",
+			expectedRouteID: "route1",
+		},
+		{
+			name: "p2p routes with latency 0 should maintain previous choice",
+			statuses: map[route.ID]routerPeerStatus{
+				"route1": {
+					connected: true,
+					relayed:   false,
+					latency:   0 * time.Millisecond,
+				},
+				"route2": {
+					connected: true,
+					relayed:   false,
+					latency:   0 * time.Millisecond,
 				},
 			},
 			existingRoutes: map[route.ID]*route.Route{
@@ -272,13 +292,11 @@ func TestGetBestrouteFromStatuses(t *testing.T) {
 				"route1": {
 					connected: true,
 					relayed:   false,
-					direct:    true,
 					latency:   200 * time.Millisecond,
 				},
 				"route2": {
 					connected: true,
 					relayed:   false,
-					direct:    true,
 					latency:   10 * time.Millisecond,
 				},
 			},
@@ -303,13 +321,11 @@ func TestGetBestrouteFromStatuses(t *testing.T) {
 				"route1": {
 					connected: true,
 					relayed:   false,
-					direct:    true,
 					latency:   20 * time.Millisecond,
 				},
 				"route2": {
 					connected: true,
 					relayed:   false,
-					direct:    true,
 					latency:   10 * time.Millisecond,
 				},
 			},
@@ -328,6 +344,45 @@ func TestGetBestrouteFromStatuses(t *testing.T) {
 			currentRoute:    "routeDoesntExistAnymore",
 			expectedRouteID: "route2",
 		},
+	}
+
+	// fill the test data with random routes
+	for _, tc := range testCases {
+		for i := 0; i < 50; i++ {
+			dummyRoute := &route.Route{
+				ID:     route.ID(fmt.Sprintf("dummy_p1_%d", i)),
+				Metric: route.MinMetric,
+				Peer:   fmt.Sprintf("dummy_p1_%d", i),
+			}
+			tc.existingRoutes[dummyRoute.ID] = dummyRoute
+		}
+		for i := 0; i < 50; i++ {
+			dummyRoute := &route.Route{
+				ID:     route.ID(fmt.Sprintf("dummy_p2_%d", i)),
+				Metric: route.MinMetric,
+				Peer:   fmt.Sprintf("dummy_p1_%d", i),
+			}
+			tc.existingRoutes[dummyRoute.ID] = dummyRoute
+		}
+
+		for i := 0; i < 50; i++ {
+			id := route.ID(fmt.Sprintf("dummy_p1_%d", i))
+			dummyStatus := routerPeerStatus{
+				connected: false,
+				relayed:   true,
+				latency:   0,
+			}
+			tc.statuses[id] = dummyStatus
+		}
+		for i := 0; i < 50; i++ {
+			id := route.ID(fmt.Sprintf("dummy_p2_%d", i))
+			dummyStatus := routerPeerStatus{
+				connected: false,
+				relayed:   true,
+				latency:   0,
+			}
+			tc.statuses[id] = dummyStatus
+		}
 	}
 
 	for _, tc := range testCases {
